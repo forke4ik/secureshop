@@ -32,11 +32,10 @@ flask_app = Flask(__name__)
 
 class TelegramBot:
     def __init__(self):
-        global telegram_app
         self.application = Application.builder().token(BOT_TOKEN).build()
-        telegram_app = self.application
         self.setup_handlers()
         self.ping_running = False
+        self.initialized = False
     
     def setup_handlers(self):
         """Настройка обработчиков команд и сообщений"""
@@ -44,6 +43,16 @@ class TelegramBot:
         self.application.add_handler(CallbackQueryHandler(self.button_handler))
         self.application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, self.handle_message))
         self.application.add_error_handler(self.error_handler)
+    
+    async def initialize(self):
+        """Асинхронная инициализация приложения"""
+        try:
+            await self.application.initialize()
+            self.initialized = True
+            logger.info("✅ Telegram Application инициализирован")
+        except Exception as e:
+            logger.error(f"❌ Ошибка инициализации Telegram Application: {e}")
+            raise
     
     async def start(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Обработчик команды /start"""
@@ -288,7 +297,8 @@ def health():
         'active_conversations': len(active_conversations),
         'owner_client_map': len(owner_client_map),
         'ping_interval': PING_INTERVAL,
-        'webhook_url': WEBHOOK_URL
+        'webhook_url': WEBHOOK_URL,
+        'initialized': bot_instance.initialized if bot_instance else False
     }), 200
 
 @flask_app.route(f'/{BOT_TOKEN}', methods=['POST'])
@@ -296,7 +306,7 @@ def webhook():
     """Обработчик webhook для Telegram"""
     global telegram_app
     
-    if not telegram_app:
+    if not telegram_app or not bot_instance.initialized:
         logger.error("Telegram app не инициализирован")
         return jsonify({'error': 'Bot not initialized'}), 500
     
@@ -304,6 +314,8 @@ def webhook():
         json_data = request.get_json()
         if json_data:
             update = Update.de_json(json_data, telegram_app.bot)
+            
+            # Создаем новый event loop для обработки
             loop = asyncio.new_event_loop()
             asyncio.set_event_loop(loop)
             try:
@@ -323,7 +335,8 @@ def index():
         'status': 'running',
         'webhook_url': f"{WEBHOOK_URL}/{BOT_TOKEN}",
         'ping_interval': f"{PING_INTERVAL} секунд",
-        'owners': ['@HiGki2pYYY', '@oc33t']
+        'owners': ['@HiGki2pYYY', '@oc33t'],
+        'initialized': bot_instance.initialized if bot_instance else False
     }), 200
 
 async def setup_webhook():
@@ -337,6 +350,26 @@ async def setup_webhook():
         logger.error(f"❌ Ошибка установки webhook: {e}")
         return False
 
+async def initialize_bot():
+    """Инициализация бота"""
+    global telegram_app
+    
+    try:
+        # Инициализируем приложение
+        await bot_instance.initialize()
+        telegram_app = bot_instance.application
+        
+        # Устанавливаем webhook
+        success = await setup_webhook()
+        if success:
+            logger.info("✅ Бот полностью инициализирован")
+        else:
+            logger.error("❌ Не удалось настроить webhook")
+            
+    except Exception as e:
+        logger.error(f"❌ Ошибка инициализации бота: {e}")
+        raise
+
 def main():
     """Основная функция"""
     flask_app.start_time = time.time()
@@ -349,27 +382,24 @@ def main():
     logger.info(f"👤 Основатель 1: {OWNER_ID_1} (@HiGki2pYYY)")
     logger.info(f"👤 Основатель 2: {OWNER_ID_2} (@oc33t)")
     
-    global telegram_app
-    telegram_app = bot_instance.application
-    
-    # Настраиваем webhook
-    def setup_webhook_thread():
+    # Инициализируем бота в отдельном потоке
+    def init_bot_thread():
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
         try:
-            success = loop.run_until_complete(setup_webhook())
-            if success:
-                logger.info("✅ Webhook успешно настроен")
-            else:
-                logger.error("❌ Не удалось настроить webhook")
+            loop.run_until_complete(initialize_bot())
         except Exception as e:
-            logger.error(f"❌ Ошибка в потоке webhook: {e}")
+            logger.error(f"❌ Критическая ошибка инициализации: {e}")
         finally:
             loop.close()
     
-    webhook_thread = threading.Thread(target=setup_webhook_thread)
-    webhook_thread.daemon = True
-    webhook_thread.start()
+    # Запускаем инициализацию в отдельном потоке
+    init_thread = threading.Thread(target=init_bot_thread)
+    init_thread.daemon = True
+    init_thread.start()
+    
+    # Ждем немного, чтобы инициализация началась
+    time.sleep(2)
     
     # Запускаем пинговалку
     bot_instance.start_ping_service()
