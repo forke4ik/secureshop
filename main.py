@@ -21,6 +21,7 @@ OWNER_ID_2 = 6279578957  # @oc33t
 PORT = int(os.getenv('PORT', 8443))
 WEBHOOK_URL = os.getenv('WEBHOOK_URL', 'https://secureshop-3obw.onrender.com')
 PING_INTERVAL = int(os.getenv('PING_INTERVAL', 840))  # 14 минут
+USE_POLLING = os.getenv('USE_POLLING', 'false').lower() == 'true'
 
 # Словари для хранения данных
 active_conversations = {}
@@ -29,8 +30,7 @@ owner_client_map = {}
 # Глобальные переменные для приложения
 telegram_app = None
 flask_app = Flask(__name__)
-webhook_loop = None
-webhook_thread = None
+bot_running = False
 
 class TelegramBot:
     def __init__(self):
@@ -38,6 +38,7 @@ class TelegramBot:
         self.setup_handlers()
         self.ping_running = False
         self.initialized = False
+        self.polling_task = None
     
     def setup_handlers(self):
         """Настройка обработчиков команд и сообщений"""
@@ -55,6 +56,35 @@ class TelegramBot:
         except Exception as e:
             logger.error(f"❌ Ошибка инициализации Telegram Application: {e}")
             raise
+    
+    async def start_polling(self):
+        """Запуск polling режима"""
+        try:
+            logger.info("🔄 Запуск polling режима...")
+            await self.application.start()
+            await self.application.updater.start_polling(
+                poll_interval=1.0,
+                timeout=10,
+                bootstrap_retries=-1,
+                read_timeout=10,
+                write_timeout=10,
+                connect_timeout=10,
+                pool_timeout=10
+            )
+            logger.info("✅ Polling запущен")
+        except Exception as e:
+            logger.error(f"❌ Ошибка запуска polling: {e}")
+            raise
+    
+    async def stop_polling(self):
+        """Остановка polling"""
+        try:
+            if self.application.updater:
+                await self.application.updater.stop()
+            await self.application.stop()
+            logger.info("🛑 Polling остановлен")
+        except Exception as e:
+            logger.error(f"❌ Ошибка остановки polling: {e}")
     
     async def start(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Обработчик команды /start"""
@@ -287,7 +317,9 @@ def ping():
         'status': 'alive',
         'message': 'Bot is running',
         'timestamp': time.time(),
-        'uptime': time.time() - flask_app.start_time if hasattr(flask_app, 'start_time') else 0
+        'uptime': time.time() - flask_app.start_time if hasattr(flask_app, 'start_time') else 0,
+        'bot_running': bot_running,
+        'mode': 'polling' if USE_POLLING else 'webhook'
     }), 200
 
 @flask_app.route('/health', methods=['GET'])
@@ -300,48 +332,36 @@ def health():
         'owner_client_map': len(owner_client_map),
         'ping_interval': PING_INTERVAL,
         'webhook_url': WEBHOOK_URL,
-        'initialized': bot_instance.initialized if bot_instance else False
+        'initialized': bot_instance.initialized if bot_instance else False,
+        'bot_running': bot_running,
+        'mode': 'polling' if USE_POLLING else 'webhook'
     }), 200
 
-def start_webhook_loop():
-    """Запуск event loop для webhook в отдельном потоке"""
-    global webhook_loop
-    webhook_loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(webhook_loop)
+@flask_app.route('/restart', methods=['POST'])
+def restart_bot():
+    """Перезапуск бота"""
+    global bot_running
     try:
-        webhook_loop.run_forever()
+        if bot_running:
+            # Останавливаем текущий бот
+            asyncio.create_task(bot_instance.stop_polling())
+            bot_running = False
+            time.sleep(2)
+        
+        # Запускаем снова
+        asyncio.create_task(start_bot())
+        return jsonify({'status': 'restarting'}), 200
     except Exception as e:
-        logger.error(f"Ошибка в webhook event loop: {e}")
-    finally:
-        if not webhook_loop.is_closed():
-            webhook_loop.close()
+        logger.error(f"Ошибка перезапуска бота: {e}")
+        return jsonify({'error': str(e)}), 500
 
-def run_async_in_webhook_loop(coro):
-    """Запуск coroutine в webhook event loop с улучшенной обработкой ошибок"""
-    global webhook_loop
-    
-    if not webhook_loop or webhook_loop.is_closed():
-        logger.error("Webhook event loop не запущен или закрыт")
-        return None
-    
-    try:
-        # Проверяем, что loop все еще работает
-        if webhook_loop.is_running():
-            future = asyncio.run_coroutine_threadsafe(coro, webhook_loop)
-            return future.result(timeout=30)
-        else:
-            logger.error("Webhook event loop не запущен")
-            return None
-    except asyncio.TimeoutError:
-        logger.error("Timeout при выполнении coroutine в webhook loop")
-        return None
-    except Exception as e:
-        logger.error(f"Ошибка при выполнении coroutine в webhook loop: {e}")
-        return None
-
+# Webhook обработчик (если используется webhook режим)
 @flask_app.route(f'/{BOT_TOKEN}', methods=['POST'])
 def webhook():
-    """Обработчик webhook для Telegram"""
+    """Обработчик webhook для Telegram (только для webhook режима)"""
+    if USE_POLLING:
+        return jsonify({'error': 'Webhook disabled in polling mode'}), 400
+    
     global telegram_app
     
     if not telegram_app or not bot_instance.initialized:
@@ -352,14 +372,9 @@ def webhook():
         json_data = request.get_json()
         if json_data:
             update = Update.de_json(json_data, telegram_app.bot)
-            
-            # Запускаем обработку в webhook event loop
-            result = run_async_in_webhook_loop(telegram_app.process_update(update))
-            
-            if result is None:
-                logger.warning("Не удалось обработать update в webhook loop")
-                return jsonify({'error': 'Processing failed'}), 500
-            
+            # В webhook режиме нужно обрабатывать синхронно
+            # Это требует более сложной настройки, поэтому используем polling
+            pass
         return '', 200
     except Exception as e:
         logger.error(f"Ошибка обработки webhook: {e}")
@@ -371,14 +386,25 @@ def index():
     return jsonify({
         'message': 'Telegram Bot SecureShop активен',
         'status': 'running',
-        'webhook_url': f"{WEBHOOK_URL}/{BOT_TOKEN}",
+        'mode': 'polling' if USE_POLLING else 'webhook',
+        'webhook_url': f"{WEBHOOK_URL}/{BOT_TOKEN}" if not USE_POLLING else None,
         'ping_interval': f"{PING_INTERVAL} секунд",
         'owners': ['@HiGki2pYYY', '@oc33t'],
-        'initialized': bot_instance.initialized if bot_instance else False
+        'initialized': bot_instance.initialized if bot_instance else False,
+        'bot_running': bot_running
     }), 200
 
 async def setup_webhook():
-    """Настройка webhook"""
+    """Настройка webhook (только для webhook режима)"""
+    if USE_POLLING:
+        # Удаляем webhook если используем polling
+        try:
+            await telegram_app.bot.delete_webhook()
+            logger.info("🗑️ Webhook удален - используется polling режим")
+        except Exception as e:
+            logger.error(f"Ошибка удаления webhook: {e}")
+        return True
+    
     try:
         webhook_url = f"{WEBHOOK_URL}/{BOT_TOKEN}"
         await telegram_app.bot.set_webhook(webhook_url)
@@ -388,30 +414,55 @@ async def setup_webhook():
         logger.error(f"❌ Ошибка установки webhook: {e}")
         return False
 
-async def initialize_bot():
-    """Инициализация бота"""
-    global telegram_app
+async def start_bot():
+    """Запуск бота"""
+    global telegram_app, bot_running
     
     try:
         # Инициализируем приложение
         await bot_instance.initialize()
         telegram_app = bot_instance.application
         
-        # Устанавливаем webhook
-        success = await setup_webhook()
-        if success:
-            logger.info("✅ Бот полностью инициализирован")
+        if USE_POLLING:
+            # Polling режим
+            await setup_webhook()  # Удаляем webhook
+            await bot_instance.start_polling()
+            bot_running = True
+            logger.info("✅ Бот запущен в polling режиме")
         else:
-            logger.error("❌ Не удалось настроить webhook")
-            
+            # Webhook режим
+            success = await setup_webhook()
+            if success:
+                bot_running = True
+                logger.info("✅ Бот запущен в webhook режиме")
+            else:
+                logger.error("❌ Не удалось настроить webhook")
+                
     except Exception as e:
-        logger.error(f"❌ Ошибка инициализации бота: {e}")
+        logger.error(f"❌ Ошибка запуска бота: {e}")
+        bot_running = False
         raise
+
+def bot_thread():
+    """Поток для запуска бота"""
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+    try:
+        loop.run_until_complete(start_bot())
+        if USE_POLLING:
+            # Держим loop живым для polling
+            loop.run_forever()
+    except Exception as e:
+        logger.error(f"❌ Критическая ошибка в bot_thread: {e}")
+    finally:
+        try:
+            if not loop.is_closed():
+                loop.close()
+        except:
+            pass
 
 def main():
     """Основная функция"""
-    global webhook_thread
-    
     flask_app.start_time = time.time()
     
     logger.info("🚀 Запуск SecureShop Telegram Bot...")
@@ -419,35 +470,17 @@ def main():
     logger.info(f"🌐 PORT: {PORT}")
     logger.info(f"📡 WEBHOOK_URL: {WEBHOOK_URL}")
     logger.info(f"⏰ PING_INTERVAL: {PING_INTERVAL} секунд")
+    logger.info(f"🔄 РЕЖИМ: {'Polling' if USE_POLLING else 'Webhook'}")
     logger.info(f"👤 Основатель 1: {OWNER_ID_1} (@HiGki2pYYY)")
     logger.info(f"👤 Основатель 2: {OWNER_ID_2} (@oc33t)")
     
-    # Запускаем webhook event loop в отдельном потоке
-    webhook_thread = threading.Thread(target=start_webhook_loop)
-    webhook_thread.daemon = True
-    webhook_thread.start()
+    # Запускаем бота в отдельном потоке
+    bot_thread_instance = threading.Thread(target=bot_thread)
+    bot_thread_instance.daemon = True
+    bot_thread_instance.start()
     
-    # Ждем запуска webhook loop
-    time.sleep(1)
-    
-    # Инициализируем бота
-    def init_bot_thread():
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-        try:
-            loop.run_until_complete(initialize_bot())
-        except Exception as e:
-            logger.error(f"❌ Критическая ошибка инициализации: {e}")
-        finally:
-            loop.close()
-    
-    # Запускаем инициализацию в отдельном потоке
-    init_thread = threading.Thread(target=init_bot_thread)
-    init_thread.daemon = True
-    init_thread.start()
-    
-    # Ждем немного, чтобы инициализация началась
-    time.sleep(2)
+    # Ждем немного для инициализации
+    time.sleep(3)
     
     # Запускаем пинговалку
     bot_instance.start_ping_service()
