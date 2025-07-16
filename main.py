@@ -2,10 +2,11 @@ import logging
 import os
 import asyncio
 import aiohttp
+import threading
+import time
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, MessageHandler, CallbackQueryHandler, filters, ContextTypes
 from flask import Flask, request, jsonify
-import threading
 
 # Настройка логирования
 logging.basicConfig(
@@ -26,17 +27,24 @@ PING_INTERVAL = int(os.getenv('PING_INTERVAL', 840))  # Интервал пин�
 active_conversations = {}  # {client_id: {'type': 'order/question', 'user_info': user, 'assigned_owner': owner_id}}
 owner_client_map = {}  # {owner_id: client_id} - текущий клиент для каждого основателя
 
+# Глобальная переменная для приложения
+telegram_app = None
+flask_app = Flask(__name__)
+
 class TelegramBot:
     def __init__(self):
+        global telegram_app
         self.application = Application.builder().token(BOT_TOKEN).build()
-        self.ping_task = None
+        telegram_app = self.application
         self.setup_handlers()
+        self.ping_running = False
     
     def setup_handlers(self):
         """Настройка обработчиков команд и сообщений"""
         self.application.add_handler(CommandHandler("start", self.start))
         self.application.add_handler(CallbackQueryHandler(self.button_handler))
         self.application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, self.handle_message))
+        self.application.add_error_handler(self.error_handler)
     
     async def start(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Обработчик команды /start"""
@@ -251,84 +259,143 @@ class TelegramBot:
         """Обработчик ошибок"""
         logger.warning(f'Update {update} caused error {context.error}')
     
-    async def setup_webhook(self):
-        """Настройка webhook для Telegram"""
-        webhook_url = f"{WEBHOOK_URL}/{BOT_TOKEN}"
-        await self.application.bot.set_webhook(webhook_url)
-        logger.info(f"Webhook установлен: {webhook_url}")
-        
-        # Запускаем пинговалку
-        await self.ping_server()
+    def start_ping_service(self):
+        """Запуск пинговалки в отдельном потоке"""
+        if not self.ping_running:
+            self.ping_running = True
+            ping_thread = threading.Thread(target=self.ping_loop)
+            ping_thread.daemon = True
+            ping_thread.start()
+            logger.info("Пинговалка запущена")
     
-    async def ping_server(self):
-        """Пинговалка для предотвращения засыпания на Render.com"""
+    def ping_loop(self):
+        """Цикл пинга в отдельном потоке"""
+        import requests
         ping_url = f"{WEBHOOK_URL}/ping"
         
-        while True:
+        while self.ping_running:
             try:
-                async with aiohttp.ClientSession() as session:
-                    async with session.get(ping_url, timeout=10) as response:
-                        if response.status == 200:
-                            logger.info("✅ Ping успешен")
-                        else:
-                            logger.warning(f"⚠️ Ping вернул статус {response.status}")
-            except asyncio.TimeoutError:
-                logger.warning("⚠️ Ping timeout")
+                response = requests.get(ping_url, timeout=10)
+                if response.status_code == 200:
+                    logger.info("✅ Ping успешен")
+                else:
+                    logger.warning(f"⚠️ Ping вернул статус {response.status_code}")
             except Exception as e:
                 logger.error(f"❌ Ошибка ping: {e}")
             
-            # Ждем перед следующим пингом
-            await asyncio.sleep(PING_INTERVAL)
+            time.sleep(PING_INTERVAL)
+
+# Создаем экземпляр бота
+bot_instance = TelegramBot()
+
+# Flask маршруты
+@flask_app.route('/ping', methods=['GET'])
+def ping():
+    """Эндпоинт для пинга"""
+    return jsonify({
+        'status': 'alive', 
+        'message': 'Bot is running',
+        'timestamp': time.time()
+    }), 200
+
+@flask_app.route('/health', methods=['GET'])
+def health():
+    """Эндпоинт для проверки здоровья"""
+    return jsonify({
+        'status': 'healthy',
+        'bot_token': BOT_TOKEN[:10] + '...',
+        'active_conversations': len(active_conversations),
+        'owner_client_map': len(owner_client_map)
+    }), 200
+
+@flask_app.route(f'/{BOT_TOKEN}', methods=['POST'])
+def webhook():
+    """Обработчик webhook для Telegram"""
+    global telegram_app
     
-    def run_webhook(self):
-        """Запуск бота с webhook для Render.com"""
-        self.application.add_error_handler(self.error_handler)
-        
-        logger.info(f"Запускаем webhook на {WEBHOOK_URL}")
-        logger.info(f"Интервал пинга: {PING_INTERVAL} секунд")
-        
-        # Создаем Flask приложение для обработки пинга
-        app = Flask(__name__)
-        
-        @app.route('/ping', methods=['GET'])
-        def ping():
-            return jsonify({'status': 'alive', 'message': 'Bot is running'}), 200
-        
-        @app.route(f'/{BOT_TOKEN}', methods=['POST'])
-        def webhook():
-            """Обработчик webhook для Telegram"""
-            json_data = request.get_json()
-            if json_data:
-                update = Update.de_json(json_data, self.application.bot)
-                asyncio.run(self.application.process_update(update))
-            return '', 200
-        
-        # Запускаем Flask сервер в отдельном потоке
-        def run_flask():
-            app.run(host='0.0.0.0', port=PORT, debug=False)
-        
-        flask_thread = threading.Thread(target=run_flask)
-        flask_thread.daemon = True
-        flask_thread.start()
-        
-        # Запускаем пинговалку в фоновом режиме
-        asyncio.create_task(self.ping_server())
-        
-        # Настраиваем webhook для Telegram
-        asyncio.run(self.setup_webhook())
+    if not telegram_app:
+        return jsonify({'error': 'Bot not initialized'}), 500
+    
+    try:
+        json_data = request.get_json()
+        if json_data:
+            update = Update.de_json(json_data, telegram_app.bot)
+            # Создаем новый event loop для обработки обновления
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            try:
+                loop.run_until_complete(telegram_app.process_update(update))
+            finally:
+                loop.close()
+        return '', 200
+    except Exception as e:
+        logger.error(f"Ошибка обработки webhook: {e}")
+        return jsonify({'error': str(e)}), 500
+
+@flask_app.route('/', methods=['GET'])
+def index():
+    """Главная страница"""
+    return jsonify({
+        'message': 'Telegram Bot is running',
+        'status': 'active',
+        'webhook_url': f"{WEBHOOK_URL}/{BOT_TOKEN}",
+        'ping_interval': PING_INTERVAL
+    }), 200
+
+async def setup_webhook():
+    """Настройка webhook"""
+    try:
+        webhook_url = f"{WEBHOOK_URL}/{BOT_TOKEN}"
+        await telegram_app.bot.set_webhook(webhook_url)
+        logger.info(f"✅ Webhook установлен: {webhook_url}")
+        return True
+    except Exception as e:
+        logger.error(f"❌ Ошибка установки webhook: {e}")
+        return False
 
 def main():
     """Основная функция"""
-    logger.info("Запуск бота...")
+    logger.info("🚀 Запуск бота...")
     logger.info(f"BOT_TOKEN: {BOT_TOKEN[:10]}...")
     logger.info(f"PORT: {PORT}")
     logger.info(f"WEBHOOK_URL: {WEBHOOK_URL}")
+    logger.info(f"PING_INTERVAL: {PING_INTERVAL} секунд")
     logger.info(f"Основатель 1: {OWNER_ID_1}")
     logger.info(f"Основатель 2: {OWNER_ID_2}")
     
-    bot = TelegramBot()
-    logger.info("Бот запущен")
-    bot.run_webhook()
+    # Инициализируем бота
+    global telegram_app
+    telegram_app = bot_instance.application
+    
+    # Настраиваем webhook в отдельном потоке
+    def setup_webhook_thread():
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        try:
+            success = loop.run_until_complete(setup_webhook())
+            if success:
+                logger.info("✅ Webhook успешно настроен")
+            else:
+                logger.error("❌ Не удалось настроить webhook")
+        finally:
+            loop.close()
+    
+    webhook_thread = threading.Thread(target=setup_webhook_thread)
+    webhook_thread.daemon = True
+    webhook_thread.start()
+    
+    # Запускаем пинговалку
+    bot_instance.start_ping_service()
+    
+    # Запускаем Flask сервер
+    logger.info("🌐 Запуск Flask сервера...")
+    flask_app.run(
+        host='0.0.0.0',
+        port=PORT,
+        debug=False,
+        use_reloader=False,
+        threaded=True
+    )
 
 if __name__ == '__main__':
     main()
