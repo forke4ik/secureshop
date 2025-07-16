@@ -3,6 +3,7 @@ import os
 import asyncio
 import threading
 import time
+import json
 from datetime import datetime
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, MessageHandler, CallbackQueryHandler, filters, ContextTypes
@@ -25,18 +26,44 @@ WEBHOOK_URL = os.getenv('WEBHOOK_URL', 'https://secureshop-3obw.onrender.com')
 PING_INTERVAL = int(os.getenv('PING_INTERVAL', 840))  # 14 минут
 USE_POLLING = os.getenv('USE_POLLING', 'true').lower() == 'true'
 
+# Путь к файлу с данными
+STATS_FILE = "bot_stats.json"
+
+# Функции для работы с данными
+def load_stats():
+    if os.path.exists(STATS_FILE):
+        try:
+            with open(STATS_FILE, 'r') as f:
+                return json.load(f)
+        except Exception as e:
+            logger.error(f"Ошибка загрузки статистики: {e}")
+            return default_stats()
+    return default_stats()
+
+def default_stats():
+    return {
+        'total_users': 0,
+        'active_users': [],
+        'total_orders': 0,
+        'total_questions': 0,
+        'first_start': datetime.now().isoformat(),
+        'last_save': datetime.now().isoformat()
+    }
+
+def save_stats():
+    try:
+        bot_statistics['last_save'] = datetime.now().isoformat()
+        with open(STATS_FILE, 'w') as f:
+            json.dump(bot_statistics, f, indent=2)
+    except Exception as e:
+        logger.error(f"Ошибка сохранения статистики: {e}")
+
+# Загружаем статистику
+bot_statistics = load_stats()
+
 # Словари для хранения данных
 active_conversations = {}
 owner_client_map = {}
-
-# Статистика
-bot_statistics = {
-    'total_users': 0,
-    'active_users': set(),
-    'total_orders': 0,
-    'total_questions': 0,
-    'start_time': datetime.now().isoformat()
-}
 
 # Глобальные переменные для приложения
 telegram_app = None
@@ -120,7 +147,8 @@ class TelegramBot:
         # Обновляем статистику
         if user.id not in bot_statistics['active_users']:
             bot_statistics['total_users'] += 1
-            bot_statistics['active_users'].add(user.id)
+            bot_statistics['active_users'].append(user.id)
+            save_stats()
         
         if user.id in [OWNER_ID_1, OWNER_ID_2]:
             owner_name = "@HiGki2pYYY" if user.id == OWNER_ID_1 else "@oc33t"
@@ -187,14 +215,19 @@ class TelegramBot:
         if owner_id not in [OWNER_ID_1, OWNER_ID_2]:
             return
             
+        first_start = datetime.fromisoformat(bot_statistics['first_start'])
+        last_save = datetime.fromisoformat(bot_statistics['last_save'])
+        uptime = datetime.now() - first_start
+        
         stats_message = f"""
 📊 Статистика бота:
 
 👤 Усього користувачів: {bot_statistics['total_users']}
 🛒 Усього замовлень: {bot_statistics['total_orders']}
 ❓ Усього запитаннь: {bot_statistics['total_questions']}
-🔄 Запущено: {bot_statistics['start_time']}
-⏱️ Час роботи: {datetime.now() - datetime.fromisoformat(bot_statistics['start_time'])}
+⏱️ Перший запуск: {first_start.strftime('%d.%m.%Y %H:%M')}
+⏱️ Останнє збереження: {last_save.strftime('%d.%m.%Y %H:%M')}
+⏱️ Час роботи: {uptime}
         """
         
         await update.message.reply_text(stats_message.strip())
@@ -378,6 +411,7 @@ class TelegramBot:
             
             # Обновляем статистику
             bot_statistics['total_orders'] += 1
+            save_stats()
             
             await query.edit_message_text(
                 "✅ Ваше замовлення прийнято! Засновник магазину зв'яжеться з вами найближчим часом.\n\n"
@@ -404,6 +438,7 @@ class TelegramBot:
             
             # Обновляем статистику
             bot_statistics['total_questions'] += 1
+            save_stats()
             
             await query.edit_message_text(
                 "📝 Напишіть ваше запитання. Я передам його засновнику магазину."
@@ -766,7 +801,7 @@ def ping():
         'status': 'alive',
         'message': 'Bot is running',
         'timestamp': time.time(),
-        'uptime': time.time() - datetime.fromisoformat(bot_statistics['start_time']).timestamp(),
+        'uptime': time.time() - datetime.fromisoformat(bot_statistics['first_start']).timestamp(),
         'bot_running': bot_running,
         'mode': 'polling' if USE_POLLING else 'webhook'
     }), 200
@@ -898,8 +933,18 @@ def bot_thread():
         time.sleep(5)
         bot_thread()
 
+def auto_save_loop():
+    """Функция автосохранения статистики"""
+    while True:
+        time.sleep(300)  # 5 минут
+        save_stats()
+        logger.info("✅ Статистика автосохранена")
+
 def main():
-    bot_statistics['start_time'] = datetime.now().isoformat()
+    # Запускаем автосохранение
+    auto_save_thread = threading.Thread(target=auto_save_loop)
+    auto_save_thread.daemon = True
+    auto_save_thread.start()
     
     logger.info("🚀 Запуск SecureShop Telegram Bot...")
     logger.info(f"🔑 BOT_TOKEN: {BOT_TOKEN[:10]}...")
