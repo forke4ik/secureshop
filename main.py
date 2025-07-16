@@ -448,7 +448,7 @@ async def setup_webhook_or_polling():
         bot_running = True
         logger.info("✅ Бот готов к запуску в режиме polling...")
         # Запуск polling будет в отдельной функции, которая блокирует поток
-        await telegram_app.run_polling()
+        await telegram_app.run_polling(stop_signals=[])
     else:
         webhook_url = f"{WEBHOOK_URL}/{BOT_TOKEN}"
         await telegram_app.bot.set_webhook(webhook_url)
