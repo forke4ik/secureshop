@@ -159,11 +159,9 @@ class TelegramBot:
         self.application.add_error_handler(self.error_handler)
         
         # Получаем URL для webhook
-        webhook_url = os.getenv('WEBHOOK_URL', 'https://secureshop-3obw.onrender.com')  # Ваш URL
+        webhook_url = os.getenv('WEBHOOK_URL', 'https://secureshop-3obw.onrender.com')
         
-        if not webhook_url:
-            logger.error("WEBHOOK_URL не задан в переменных окружения")
-            return
+        logger.info(f"Запускаем webhook на {webhook_url}")
         
         # Настраиваем webhook
         self.application.run_webhook(
@@ -175,9 +173,9 @@ class TelegramBot:
 
 def main():
     """Основная функция"""
-    if not BOT_TOKEN:
-        logger.error("BOT_TOKEN не задан в переменных окружения")
-        return
+    logger.info("Запуск бота...")
+    logger.info(f"BOT_TOKEN: {BOT_TOKEN[:10]}...")
+    logger.info(f"PORT: {PORT}")
     
     bot = TelegramBot()
     logger.info("Бот запущен")
