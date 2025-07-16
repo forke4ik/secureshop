@@ -26,9 +26,11 @@ PING_INTERVAL = int(os.getenv('PING_INTERVAL', 840))  # 14 минут
 active_conversations = {}
 owner_client_map = {}
 
-# Глобальная переменная для приложения
+# Глобальные переменные для приложения
 telegram_app = None
 flask_app = Flask(__name__)
+webhook_loop = None
+webhook_thread = None
 
 class TelegramBot:
     def __init__(self):
@@ -301,6 +303,22 @@ def health():
         'initialized': bot_instance.initialized if bot_instance else False
     }), 200
 
+def start_webhook_loop():
+    """Запуск event loop для webhook в отдельном потоке"""
+    global webhook_loop
+    webhook_loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(webhook_loop)
+    webhook_loop.run_forever()
+
+def run_async_in_webhook_loop(coro):
+    """Запуск coroutine в webhook event loop"""
+    global webhook_loop
+    if webhook_loop and not webhook_loop.is_closed():
+        future = asyncio.run_coroutine_threadsafe(coro, webhook_loop)
+        return future.result(timeout=30)  # 30 секунд timeout
+    else:
+        raise RuntimeError("Webhook event loop не запущен")
+
 @flask_app.route(f'/{BOT_TOKEN}', methods=['POST'])
 def webhook():
     """Обработчик webhook для Telegram"""
@@ -315,13 +333,9 @@ def webhook():
         if json_data:
             update = Update.de_json(json_data, telegram_app.bot)
             
-            # Создаем новый event loop для обработки
-            loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(loop)
-            try:
-                loop.run_until_complete(telegram_app.process_update(update))
-            finally:
-                loop.close()
+            # Запускаем обработку в webhook event loop
+            run_async_in_webhook_loop(telegram_app.process_update(update))
+            
         return '', 200
     except Exception as e:
         logger.error(f"Ошибка обработки webhook: {e}")
@@ -372,6 +386,8 @@ async def initialize_bot():
 
 def main():
     """Основная функция"""
+    global webhook_thread
+    
     flask_app.start_time = time.time()
     
     logger.info("🚀 Запуск SecureShop Telegram Bot...")
@@ -382,7 +398,15 @@ def main():
     logger.info(f"👤 Основатель 1: {OWNER_ID_1} (@HiGki2pYYY)")
     logger.info(f"👤 Основатель 2: {OWNER_ID_2} (@oc33t)")
     
-    # Инициализируем бота в отдельном потоке
+    # Запускаем webhook event loop в отдельном потоке
+    webhook_thread = threading.Thread(target=start_webhook_loop)
+    webhook_thread.daemon = True
+    webhook_thread.start()
+    
+    # Ждем запуска webhook loop
+    time.sleep(1)
+    
+    # Инициализируем бота
     def init_bot_thread():
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
