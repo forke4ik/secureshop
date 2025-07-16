@@ -1,7 +1,11 @@
 import logging
 import os
+import asyncio
+import aiohttp
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, MessageHandler, CallbackQueryHandler, filters, ContextTypes
+from flask import Flask, request, jsonify
+import threading
 
 # Настройка логирования
 logging.basicConfig(
@@ -15,6 +19,8 @@ BOT_TOKEN = os.getenv('BOT_TOKEN', '8181378677:AAFullvwrNhPJMi_HxgC75qSEKWdKOtCp
 OWNER_ID_1 = 7106925462  # ID первого основателя @HiGki2pYYY
 OWNER_ID_2 = 6279578957  # ID второго основателя @oc33t
 PORT = int(os.getenv('PORT', 8443))  # Порт для webhook
+WEBHOOK_URL = os.getenv('WEBHOOK_URL', 'https://secureshop-3obw.onrender.com')  # URL для webhook
+PING_INTERVAL = int(os.getenv('PING_INTERVAL', 840))  # Интервал пинга в секундах (14 минут)
 
 # Словари для хранения данных
 active_conversations = {}  # {client_id: {'type': 'order/question', 'user_info': user, 'assigned_owner': owner_id}}
@@ -23,6 +29,7 @@ owner_client_map = {}  # {owner_id: client_id} - текущий клиент д�
 class TelegramBot:
     def __init__(self):
         self.application = Application.builder().token(BOT_TOKEN).build()
+        self.ping_task = None
         self.setup_handlers()
     
     def setup_handlers(self):
@@ -244,28 +251,78 @@ class TelegramBot:
         """Обработчик ошибок"""
         logger.warning(f'Update {update} caused error {context.error}')
     
+    async def setup_webhook(self):
+        """Настройка webhook для Telegram"""
+        webhook_url = f"{WEBHOOK_URL}/{BOT_TOKEN}"
+        await self.application.bot.set_webhook(webhook_url)
+        logger.info(f"Webhook установлен: {webhook_url}")
+        
+        # Запускаем пинговалку
+        await self.ping_server()
+    
+    async def ping_server(self):
+        """Пинговалка для предотвращения засыпания на Render.com"""
+        ping_url = f"{WEBHOOK_URL}/ping"
+        
+        while True:
+            try:
+                async with aiohttp.ClientSession() as session:
+                    async with session.get(ping_url, timeout=10) as response:
+                        if response.status == 200:
+                            logger.info("✅ Ping успешен")
+                        else:
+                            logger.warning(f"⚠️ Ping вернул статус {response.status}")
+            except asyncio.TimeoutError:
+                logger.warning("⚠️ Ping timeout")
+            except Exception as e:
+                logger.error(f"❌ Ошибка ping: {e}")
+            
+            # Ждем перед следующим пингом
+            await asyncio.sleep(PING_INTERVAL)
+    
     def run_webhook(self):
         """Запуск бота с webhook для Render.com"""
         self.application.add_error_handler(self.error_handler)
         
-        # Получаем URL для webhook
-        webhook_url = os.getenv('WEBHOOK_URL', 'https://secureshop-3obw.onrender.com')
+        logger.info(f"Запускаем webhook на {WEBHOOK_URL}")
+        logger.info(f"Интервал пинга: {PING_INTERVAL} секунд")
         
-        logger.info(f"Запускаем webhook на {webhook_url}")
+        # Создаем Flask приложение для обработки пинга
+        app = Flask(__name__)
         
-        # Настраиваем webhook
-        self.application.run_webhook(
-            listen="0.0.0.0",
-            port=PORT,
-            url_path=BOT_TOKEN,
-            webhook_url=f"{webhook_url}/{BOT_TOKEN}"
-        )
+        @app.route('/ping', methods=['GET'])
+        def ping():
+            return jsonify({'status': 'alive', 'message': 'Bot is running'}), 200
+        
+        @app.route(f'/{BOT_TOKEN}', methods=['POST'])
+        def webhook():
+            """Обработчик webhook для Telegram"""
+            json_data = request.get_json()
+            if json_data:
+                update = Update.de_json(json_data, self.application.bot)
+                asyncio.run(self.application.process_update(update))
+            return '', 200
+        
+        # Запускаем Flask сервер в отдельном потоке
+        def run_flask():
+            app.run(host='0.0.0.0', port=PORT, debug=False)
+        
+        flask_thread = threading.Thread(target=run_flask)
+        flask_thread.daemon = True
+        flask_thread.start()
+        
+        # Запускаем пинговалку в фоновом режиме
+        asyncio.create_task(self.ping_server())
+        
+        # Настраиваем webhook для Telegram
+        asyncio.run(self.setup_webhook())
 
 def main():
     """Основная функция"""
     logger.info("Запуск бота...")
     logger.info(f"BOT_TOKEN: {BOT_TOKEN[:10]}...")
     logger.info(f"PORT: {PORT}")
+    logger.info(f"WEBHOOK_URL: {WEBHOOK_URL}")
     logger.info(f"Основатель 1: {OWNER_ID_1}")
     logger.info(f"Основатель 2: {OWNER_ID_2}")
     
