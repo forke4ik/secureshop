@@ -3,6 +3,7 @@ import os
 import asyncio
 import threading
 import time
+from datetime import datetime
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, MessageHandler, CallbackQueryHandler, filters, ContextTypes
 from telegram.error import Conflict
@@ -28,6 +29,15 @@ USE_POLLING = os.getenv('USE_POLLING', 'true').lower() == 'true'
 active_conversations = {}
 owner_client_map = {}
 
+# Статистика
+bot_statistics = {
+    'total_users': 0,
+    'active_users': set(),
+    'total_orders': 0,
+    'total_questions': 0,
+    'start_time': datetime.now().isoformat()
+}
+
 # Глобальные переменные для приложения
 telegram_app = None
 flask_app = Flask(__name__)
@@ -47,6 +57,7 @@ class TelegramBot:
         """Настройка обработчиков команд и сообщений"""
         self.application.add_handler(CommandHandler("start", self.start))
         self.application.add_handler(CommandHandler("stop", self.stop_conversation))
+        self.application.add_handler(CommandHandler("stats", self.show_stats))
         self.application.add_handler(CallbackQueryHandler(self.button_handler))
         self.application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, self.handle_message))
         self.application.add_error_handler(self.error_handler)
@@ -106,6 +117,11 @@ class TelegramBot:
         """Обработчик команды /start"""
         user = update.effective_user
         
+        # Обновляем статистику
+        if user.id not in bot_statistics['active_users']:
+            bot_statistics['total_users'] += 1
+            bot_statistics['active_users'].add(user.id)
+        
         if user.id in [OWNER_ID_1, OWNER_ID_2]:
             owner_name = "@HiGki2pYYY" if user.id == OWNER_ID_1 else "@oc33t"
             await update.message.reply_text(
@@ -163,6 +179,25 @@ class TelegramBot:
             del active_conversations[client_id]
         if owner_id in owner_client_map:
             del owner_client_map[owner_id]
+    
+    async def show_stats(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Показать статистику для основателей"""
+        owner_id = update.effective_user.id
+        
+        if owner_id not in [OWNER_ID_1, OWNER_ID_2]:
+            return
+            
+        stats_message = f"""
+📊 Статистика бота:
+
+👤 Усього користувачів: {bot_statistics['total_users']}
+🛒 Усього замовлень: {bot_statistics['total_orders']}
+❓ Усього запитаннь: {bot_statistics['total_questions']}
+🔄 Запущено: {bot_statistics['start_time']}
+⏱️ Час роботи: {datetime.now() - datetime.fromisoformat(bot_statistics['start_time'])}
+        """
+        
+        await update.message.reply_text(stats_message.strip())
 
     async def button_handler(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Обработчик нажатий на кнопки"""
@@ -337,8 +372,12 @@ class TelegramBot:
                 'type': 'order',
                 'user_info': query.from_user,
                 'assigned_owner': None,
-                'order_details': order_text
+                'order_details': order_text,
+                'last_message': order_text
             }
+            
+            # Обновляем статистику
+            bot_statistics['total_orders'] += 1
             
             await query.edit_message_text(
                 "✅ Ваше замовлення прийнято! Засновник магазину зв'яжеться з вами найближчим часом.\n\n"
@@ -346,8 +385,8 @@ class TelegramBot:
                 reply_markup=None
             )
             
-            # Пересылаем заказ владельцу
-            await self.forward_order_to_owner(
+            # Пересылаем заказ обоим владельцам
+            await self.forward_order_to_owners(
                 context, 
                 user_id, 
                 query.from_user, 
@@ -359,11 +398,45 @@ class TelegramBot:
             active_conversations[user_id] = {
                 'type': 'question',
                 'user_info': query.from_user,
-                'assigned_owner': None
+                'assigned_owner': None,
+                'last_message': "Нове запитання"
             }
+            
+            # Обновляем статистику
+            bot_statistics['total_questions'] += 1
+            
             await query.edit_message_text(
                 "📝 Напишіть ваше запитання. Я передам його засновнику магазину."
             )
+        
+        # Взятие заказа основателем
+        elif query.data.startswith('take_order_'):
+            client_id = int(query.data.split('_')[2])
+            owner_id = user_id
+            
+            if client_id not in active_conversations:
+                await query.answer("Діалог вже завершено", show_alert=True)
+                return
+                
+            # Закрепляем заказ за основателем
+            active_conversations[client_id]['assigned_owner'] = owner_id
+            owner_client_map[owner_id] = client_id
+            
+            # Уведомляем основателя
+            client_info = active_conversations[client_id]['user_info']
+            await query.edit_message_text(
+                f"✅ Ви взяли замовлення від клієнта {client_info.first_name}."
+            )
+            
+            # Уведомляем другого основателя
+            other_owner = OWNER_ID_2 if owner_id == OWNER_ID_1 else OWNER_ID_1
+            try:
+                await context.bot.send_message(
+                    chat_id=other_owner,
+                    text=f"ℹ️ Замовлення від клієнта {client_info.first_name} взяв інший представник."
+                )
+            except Exception as e:
+                logger.error(f"Ошибка уведомления другого основателя: {e}")
         
         # Передача диалога другому основателю
         elif query.data.startswith('transfer_'):
@@ -380,16 +453,19 @@ class TelegramBot:
                     del owner_client_map[current_owner]
                 
                 client_info = active_conversations[client_id]['user_info']
+                last_message = active_conversations[client_id].get('last_message', 'Немає повідомлень')
                 
                 await query.edit_message_text(
                     f"✅ Чат с клиентом {client_info.first_name} передан {other_owner_name}"
                 )
                 
+                # Отправляем диалог другому основателю
                 await context.bot.send_message(
                     chat_id=other_owner,
                     text=f"📨 Вам передан чат с клиентом:\n\n"
                          f"👤 {client_info.first_name} (@{client_info.username or 'не указан'})\n"
                          f"🆔 ID: {client_info.id}\n\n"
+                         f"Останнє повідомлення:\n{last_message}\n\n"
                          f"Для ответа просто напишите сообщение. Для завершения диалога используйте /stop"
                 )
     
@@ -402,6 +478,8 @@ class TelegramBot:
             return
         
         if user_id in active_conversations:
+            # Сохраняем последнее сообщение
+            active_conversations[user_id]['last_message'] = update.message.text
             await self.forward_to_owner(update, context)
         else:
             keyboard = [
@@ -422,25 +500,80 @@ class TelegramBot:
         conversation_type = active_conversations[user_id]['type']
         
         assigned_owner = active_conversations[user_id].get('assigned_owner')
+        
+        # Если заказ еще не взят - отправляем обоим основателям
         if not assigned_owner:
-            assigned_owner = OWNER_ID_1
-            active_conversations[user_id]['assigned_owner'] = assigned_owner
+            # Для вопросов приоритет у второго основателя
+            if conversation_type == 'question':
+                assigned_owner = OWNER_ID_2
+                active_conversations[user_id]['assigned_owner'] = assigned_owner
+                owner_client_map[assigned_owner] = user_id
+                await self.forward_to_specific_owner(context, user_id, user_info, conversation_type, update.message.text, assigned_owner)
+            else:
+                # Для заказов отправляем обоим основателям
+                await self.forward_to_both_owners(context, user_id, user_info, conversation_type, update.message.text)
+            return
         
-        owner_client_map[assigned_owner] = user_id
-        
+        # Если заказ уже взят - отправляем только назначенному основателю
+        await self.forward_to_specific_owner(context, user_id, user_info, conversation_type, update.message.text, assigned_owner)
+    
+    async def forward_to_both_owners(self, context, client_id, client_info, conversation_type, message_text):
+        """Пересылка сообщения обоим основателям"""
         type_emoji = "🛒" if conversation_type == 'order' else "❓"
         type_text = "ЗАКАЗ" if conversation_type == 'order' else "ВОПРОС"
-        owner_name = "@HiGki2pYYY" if assigned_owner == OWNER_ID_1 else "@oc33t"
         
         forward_message = f"""
 {type_emoji} {type_text} от клиента:
 
-👤 Пользователь: {user_info.first_name}
-📱 Username: @{user_info.username if user_info.username else 'не указан'}
-🆔 ID: {user_info.id}
+👤 Пользователь: {client_info.first_name}
+📱 Username: @{client_info.username if client_info.username else 'не указан'}
+🆔 ID: {client_info.id}
 
 💬 Сообщение:
-{update.message.text}
+{message_text}
+
+---
+Нажмите "✅ Взять заказ", чтобы обработать этот запрос.
+        """
+        
+        keyboard = [
+            [InlineKeyboardButton("✅ Взять заказ", callback_data=f'take_order_{client_id}')]
+        ]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        
+        # Отправляем обоим основателям
+        for owner_id in [OWNER_ID_1, OWNER_ID_2]:
+            try:
+                await context.bot.send_message(
+                    chat_id=owner_id,
+                    text=forward_message.strip(),
+                    reply_markup=reply_markup
+                )
+            except Exception as e:
+                logger.error(f"Ошибка отправки сообщения основателю {owner_id}: {e}")
+        
+        # Уведомляем клиента
+        await context.bot.send_message(
+            chat_id=client_id,
+            text="✅ Ваше повідомлення передано засновникам магазину. "
+                 "Очікуйте на відповідь найближчим часом."
+        )
+    
+    async def forward_to_specific_owner(self, context, client_id, client_info, conversation_type, message_text, owner_id):
+        """Пересылка сообщения конкретному основателю"""
+        type_emoji = "🛒" if conversation_type == 'order' else "❓"
+        type_text = "ЗАКАЗ" if conversation_type == 'order' else "ВОПРОС"
+        owner_name = "@HiGki2pYYY" if owner_id == OWNER_ID_1 else "@oc33t"
+        
+        forward_message = f"""
+{type_emoji} {type_text} от клиента:
+
+👤 Пользователь: {client_info.first_name}
+📱 Username: @{client_info.username if client_info.username else 'не указан'}
+🆔 ID: {client_info.id}
+
+💬 Сообщение:
+{message_text}
 
 ---
 Для ответа просто напишите сообщение в этот чат.
@@ -449,20 +582,65 @@ class TelegramBot:
         """
         
         keyboard = [
-            [InlineKeyboardButton("🔄 Передать другому основателю", callback_data=f'transfer_{user_id}')]
+            [InlineKeyboardButton("🔄 Передать другому основателю", callback_data=f'transfer_{client_id}')]
         ]
         reply_markup = InlineKeyboardMarkup(keyboard)
         
-        await context.bot.send_message(
-            chat_id=assigned_owner,
-            text=forward_message.strip(),
-            reply_markup=reply_markup
-        )
+        try:
+            await context.bot.send_message(
+                chat_id=owner_id,
+                text=forward_message.strip(),
+                reply_markup=reply_markup
+            )
+            
+            # Уведомляем клиента
+            await context.bot.send_message(
+                chat_id=client_id,
+                text="✅ Ваше повідомлення передано засновнику магазину. "
+                     "Очікуйте на відповідь найближчим часом."
+            )
+        except Exception as e:
+            logger.error(f"Ошибка отправки сообщения основателю {owner_id}: {e}")
+            # Если не удалось отправить - пробуем другому основателю
+            other_owner = OWNER_ID_2 if owner_id == OWNER_ID_1 else OWNER_ID_1
+            active_conversations[client_id]['assigned_owner'] = other_owner
+            owner_client_map[other_owner] = client_id
+            await self.forward_to_specific_owner(context, client_id, client_info, conversation_type, message_text, other_owner)
+    
+    async def forward_order_to_owners(self, context, client_id, client_info, order_text):
+        """Пересылает заказ обоим владельцам"""
+        # Сохраняем последнее сообщение
+        active_conversations[client_id]['last_message'] = order_text
         
-        await update.message.reply_text(
-            "✅ Ваше повідомлення передано засновнику магазину. "
-            "Очікуйте на відповідь найближчим часом."
-        )
+        forward_message = f"""
+🛒 НОВЕ ЗАМОВЛЕННЯ!
+
+👤 Клієнт: {client_info.first_name}
+📱 Username: @{client_info.username if client_info.username else 'не вказано'}
+🆔 ID: {client_info.id}
+
+📋 Деталі замовлення:
+{order_text}
+
+---
+Нажмите "✅ Взять заказ", чтобы обработать этот заказ.
+        """
+        
+        keyboard = [
+            [InlineKeyboardButton("✅ Взять заказ", callback_data=f'take_order_{client_id}')]
+        ]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        
+        # Отправляем обоим основателям
+        for owner_id in [OWNER_ID_1, OWNER_ID_2]:
+            try:
+                await context.bot.send_message(
+                    chat_id=owner_id,
+                    text=forward_message.strip(),
+                    reply_markup=reply_markup
+                )
+            except Exception as e:
+                logger.error(f"Ошибка отправки заказа основателю {owner_id}: {e}")
     
     async def handle_owner_message(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Обработка сообщений от основателя"""
@@ -486,6 +664,9 @@ class TelegramBot:
             return
         
         try:
+            # Сохраняем последнее сообщение от основателя
+            active_conversations[client_id]['last_message'] = update.message.text
+            
             await context.bot.send_message(
                 chat_id=client_id,
                 text=f"📩 Відповідь від магазину:\n\n{update.message.text}"
@@ -576,41 +757,6 @@ class TelegramBot:
             'discord_full_12': 'discord_full',
         }
         return category_map.get(product_code, 'order')
-    
-    async def forward_order_to_owner(self, context, client_id, client_info, order_text):
-        """Пересылает заказ владельцу"""
-        assigned_owner = OWNER_ID_1  # Первый владелец по умолчанию
-        active_conversations[client_id]['assigned_owner'] = assigned_owner
-        owner_client_map[assigned_owner] = client_id
-        
-        owner_name = "@HiGki2pYYY" if assigned_owner == OWNER_ID_1 else "@oc33t"
-        
-        forward_message = f"""
-🛒 НОВЕ ЗАМОВЛЕННЯ!
-
-👤 Клієнт: {client_info.first_name}
-📱 Username: @{client_info.username if client_info.username else 'не вказано'}
-🆔 ID: {client_info.id}
-
-📋 Деталі замовлення:
-{order_text}
-
----
-Для відповіді напишіть повідомлення.
-Для завершення діалогу використайте /stop.
-Призначено: {owner_name}
-        """
-        
-        keyboard = [
-            [InlineKeyboardButton("🔄 Передати іншому засновнику", callback_data=f'transfer_{client_id}')]
-        ]
-        reply_markup = InlineKeyboardMarkup(keyboard)
-        
-        await context.bot.send_message(
-            chat_id=assigned_owner,
-            text=forward_message.strip(),
-            reply_markup=reply_markup
-        )
 
 bot_instance = TelegramBot()
 
@@ -620,7 +766,7 @@ def ping():
         'status': 'alive',
         'message': 'Bot is running',
         'timestamp': time.time(),
-        'uptime': time.time() - flask_app.start_time if hasattr(flask_app, 'start_time') else 0,
+        'uptime': time.time() - datetime.fromisoformat(bot_statistics['start_time']).timestamp(),
         'bot_running': bot_running,
         'mode': 'polling' if USE_POLLING else 'webhook'
     }), 200
@@ -636,7 +782,8 @@ def health():
         'webhook_url': WEBHOOK_URL,
         'initialized': bot_instance.initialized if bot_instance else False,
         'bot_running': bot_running,
-        'mode': 'polling' if USE_POLLING else 'webhook'
+        'mode': 'polling' if USE_POLLING else 'webhook',
+        'stats': bot_statistics
     }), 200
 
 @flask_app.route(f'/{BOT_TOKEN}', methods=['POST'])
@@ -670,7 +817,8 @@ def index():
         'ping_interval': f"{PING_INTERVAL} секунд",
         'owners': ['@HiGki2pYYY', '@oc33t'],
         'initialized': bot_instance.initialized if bot_instance else False,
-        'bot_running': bot_running
+        'bot_running': bot_running,
+        'stats': bot_statistics
     }), 200
 
 async def setup_webhook():
@@ -751,7 +899,7 @@ def bot_thread():
         bot_thread()
 
 def main():
-    flask_app.start_time = time.time()
+    bot_statistics['start_time'] = datetime.now().isoformat()
     
     logger.info("🚀 Запуск SecureShop Telegram Bot...")
     logger.info(f"🔑 BOT_TOKEN: {BOT_TOKEN[:10]}...")
