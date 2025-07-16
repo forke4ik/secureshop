@@ -22,7 +22,7 @@ OWNER_ID_2 = 6279578957  # @oc33t
 PORT = int(os.getenv('PORT', 8443))
 WEBHOOK_URL = os.getenv('WEBHOOK_URL', 'https://secureshop-3obw.onrender.com')
 PING_INTERVAL = int(os.getenv('PING_INTERVAL', 840))  # 14 минут
-USE_POLLING = os.getenv('USE_POLLING', 'false').lower() == 'true'
+USE_POLLING = os.getenv('USE_POLLING', 'true').lower() == 'true'
 
 # Словари для хранения данных
 active_conversations = {}
@@ -46,6 +46,7 @@ class TelegramBot:
     def setup_handlers(self):
         """Настройка обработчиков команд и сообщений"""
         self.application.add_handler(CommandHandler("start", self.start))
+        self.application.add_handler(CommandHandler("stop", self.stop_conversation))
         self.application.add_handler(CallbackQueryHandler(self.button_handler))
         self.application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, self.handle_message))
         self.application.add_error_handler(self.error_handler)
@@ -63,7 +64,6 @@ class TelegramBot:
     async def start_polling(self):
         """Запуск polling режима"""
         try:
-            # Проверка на случай конфликта
             if self.application.updater.running:
                 logger.warning("🛑 Бот уже запущен! Пропускаем повторный запуск")
                 return
@@ -84,7 +84,7 @@ class TelegramBot:
             logger.error(f"🚨 Конфликт: {e}")
             logger.warning("🕒 Ожидаем 15 секунд перед повторной попыткой...")
             await asyncio.sleep(15)
-            await self.start_polling()  # Рекурсивный перезапуск
+            await self.start_polling()
         except Exception as e:
             logger.error(f"❌ Ошибка запуска polling: {e}")
             raise
@@ -106,7 +106,6 @@ class TelegramBot:
         """Обработчик команды /start"""
         user = update.effective_user
         
-        # Проверяем, является ли пользователь основателем
         if user.id in [OWNER_ID_1, OWNER_ID_2]:
             owner_name = "@HiGki2pYYY" if user.id == OWNER_ID_1 else "@oc33t"
             await update.message.reply_text(
@@ -115,17 +114,16 @@ class TelegramBot:
             )
             return
         
-        # Приветствие для клиентов
         keyboard = [
             [InlineKeyboardButton("🛒 Зробити замовлення", callback_data='order')],
-            [InlineKeyboardButton("❓ Задати питання", callback_data='question')]
+            [InlineKeyboardButton("❓ Поставити запитання", callback_data='question')]
         ]
         reply_markup = InlineKeyboardMarkup(keyboard)
         
         welcome_message = f"""
-Добро пожаловать, {user.first_name}! 👋
+Ласкаво просимо, {user.first_name}! 👋
 
-Я бот-помощник нашего магазина. Выберите, что вас интересует:
+Я бот-помічник нашого магазину. Будь ласка, оберіть, що вас цікавить:
         """
         
         await update.message.reply_text(
@@ -133,6 +131,39 @@ class TelegramBot:
             reply_markup=reply_markup
         )
     
+    async def stop_conversation(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Обработчик команды /stop для основателей"""
+        owner_id = update.effective_user.id
+
+        if owner_id not in [OWNER_ID_1, OWNER_ID_2]:
+            return
+
+        if owner_id not in owner_client_map:
+            await update.message.reply_text("У вас нет активного диалога для завершения.")
+            return
+
+        client_id = owner_client_map[owner_id]
+        client_info = active_conversations.get(client_id, {}).get('user_info')
+
+        try:
+            await context.bot.send_message(
+                chat_id=client_id,
+                text="Діалог завершено представником магазину. Якщо у вас є нові питання, будь ласка, скористайтеся командою /start."
+            )
+            if client_info:
+                await update.message.reply_text(f"✅ Вы успешно завершили диалог с клиентом {client_info.first_name}.")
+            else:
+                await update.message.reply_text(f"✅ Вы успешно завершили диалог с клиентом ID {client_id}.")
+
+        except Exception as e:
+            logger.error(f"Ошибка при уведомлении клиента {client_id} о завершении диалога: {e}")
+            await update.message.reply_text("Не удалось уведомить клиента (возможно, он заблокировал бота), но диалог был завершен на вашей стороне.")
+
+        if client_id in active_conversations:
+            del active_conversations[client_id]
+        if owner_id in owner_client_map:
+            del owner_client_map[owner_id]
+
     async def button_handler(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Обработчик нажатий на кнопки"""
         query = update.callback_query
@@ -147,11 +178,11 @@ class TelegramBot:
                 'assigned_owner': None
             }
             
-            action_text = "оформить заказ" if query.data == 'order' else "задать вопрос"
+            action_text = "зробити замовлення" if query.data == 'order' else "поставити запитання"
             
             await query.edit_message_text(
-                f"Отлично! Напишите ваше сообщение, чтобы {action_text}. "
-                f"Я передам его основателю магазина."
+                f"Чудово! Напишіть ваше повідомлення, щоб {action_text}. "
+                f"Я передам його засновнику магазину."
             )
         
         elif query.data.startswith('transfer_'):
@@ -178,7 +209,7 @@ class TelegramBot:
                     text=f"📨 Вам передан чат с клиентом:\n\n"
                          f"👤 {client_info.first_name} (@{client_info.username or 'не указан'})\n"
                          f"🆔 ID: {client_info.id}\n\n"
-                         f"Для ответа просто напишите сообщение."
+                         f"Для ответа просто напишите сообщение. Для завершения диалога используйте /stop"
                 )
     
     async def handle_message(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -194,12 +225,12 @@ class TelegramBot:
         else:
             keyboard = [
                 [InlineKeyboardButton("🛒 Зробити замовлення", callback_data='order')],
-                [InlineKeyboardButton("❓ Задати питання", callback_data='question')]
+                [InlineKeyboardButton("❓ Поставити запитання", callback_data='question')]
             ]
             reply_markup = InlineKeyboardMarkup(keyboard)
             
             await update.message.reply_text(
-                "Выберите действие:",
+                "Будь ласка, оберіть дію або використайте /start, щоб розпочати.",
                 reply_markup=reply_markup
             )
     
@@ -209,7 +240,7 @@ class TelegramBot:
         user_info = active_conversations[user_id]['user_info']
         conversation_type = active_conversations[user_id]['type']
         
-        assigned_owner = active_conversations[user_id]['assigned_owner']
+        assigned_owner = active_conversations[user_id].get('assigned_owner')
         if not assigned_owner:
             assigned_owner = OWNER_ID_1
             active_conversations[user_id]['assigned_owner'] = assigned_owner
@@ -232,6 +263,7 @@ class TelegramBot:
 
 ---
 Для ответа просто напишите сообщение в этот чат.
+Для завершения диалога используйте /stop.
 Назначен: {owner_name}
         """
         
@@ -247,8 +279,8 @@ class TelegramBot:
         )
         
         await update.message.reply_text(
-            "✅ Ваше сообщение передано основателю магазина. "
-            "Ожидайте ответа в ближайшее время."
+            "✅ Ваше повідомлення передано засновнику магазину. "
+            "Очікуйте на відповідь найближчим часом."
         )
     
     async def handle_owner_message(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -275,7 +307,7 @@ class TelegramBot:
         try:
             await context.bot.send_message(
                 chat_id=client_id,
-                text=f"📩 Ответ от магазина:\n\n{update.message.text}"
+                text=f"📩 Відповідь від магазину:\n\n{update.message.text}"
             )
             
             client_info = active_conversations[client_id]['user_info']
@@ -322,13 +354,10 @@ class TelegramBot:
             
             time.sleep(PING_INTERVAL)
 
-# Создаем экземпляр бота
 bot_instance = TelegramBot()
 
-# Flask маршруты
 @flask_app.route('/ping', methods=['GET'])
 def ping():
-    """Эндпоинт для поддержания активности"""
     return jsonify({
         'status': 'alive',
         'message': 'Bot is running',
@@ -340,7 +369,6 @@ def ping():
 
 @flask_app.route('/health', methods=['GET'])
 def health():
-    """Эндпоинт для проверки состояния"""
     return jsonify({
         'status': 'healthy',
         'bot_token': f"{BOT_TOKEN[:10]}..." if BOT_TOKEN else "Not set",
@@ -353,10 +381,8 @@ def health():
         'mode': 'polling' if USE_POLLING else 'webhook'
     }), 200
 
-# Webhook обработчик (если используется webhook режим)
 @flask_app.route(f'/{BOT_TOKEN}', methods=['POST'])
 def webhook():
-    """Обработчик webhook для Telegram (только для webhook режима)"""
     if USE_POLLING:
         return jsonify({'error': 'Webhook disabled in polling mode'}), 400
     
@@ -370,8 +396,6 @@ def webhook():
         json_data = request.get_json()
         if json_data:
             update = Update.de_json(json_data, telegram_app.bot)
-            # В webhook режиме нужно обрабатывать синхронно
-            # Это требует более сложной настройки, поэтому используем polling
             pass
         return '', 200
     except Exception as e:
@@ -380,7 +404,6 @@ def webhook():
 
 @flask_app.route('/', methods=['GET'])
 def index():
-    """Главная страница"""
     return jsonify({
         'message': 'Telegram Bot SecureShop активен',
         'status': 'running',
@@ -393,9 +416,7 @@ def index():
     }), 200
 
 async def setup_webhook():
-    """Настройка webhook (только для webhook режима)"""
     if USE_POLLING:
-        # Удаляем webhook если используем polling
         try:
             await telegram_app.bot.delete_webhook()
             logger.info("🗑️ Webhook удален - используется polling режим")
@@ -413,7 +434,6 @@ async def setup_webhook():
         return False
 
 async def start_bot():
-    """Запуск бота"""
     global telegram_app, bot_running
     
     with bot_lock:
@@ -422,18 +442,15 @@ async def start_bot():
             return
         
         try:
-            # Инициализируем приложение
             await bot_instance.initialize()
             telegram_app = bot_instance.application
             
             if USE_POLLING:
-                # Polling режим
-                await setup_webhook()  # Удаляем webhook
+                await setup_webhook()
                 await bot_instance.start_polling()
                 bot_running = True
                 logger.info("✅ Бот запущен в polling режиме")
             else:
-                # Webhook режим
                 success = await setup_webhook()
                 if success:
                     bot_running = True
@@ -447,7 +464,6 @@ async def start_bot():
             raise
 
 def bot_thread():
-    """Поток для запуска бота"""
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
     bot_instance.loop = loop
@@ -455,18 +471,17 @@ def bot_thread():
     try:
         loop.run_until_complete(start_bot())
         if USE_POLLING:
-            # Держим loop живым для polling
             loop.run_forever()
     except Conflict as e:
         logger.error(f"🚨 Критический конфликт: {e}")
         logger.warning("🕒 Ожидаем 30 секунд перед повторным запуском...")
         time.sleep(30)
-        bot_thread()  # Рекурсивный перезапуск
+        bot_thread()
     except Exception as e:
         logger.error(f"❌ Критическая ошибка в bot_thread: {e}")
         logger.warning("🕒 Ожидаем 15 секунд перед повторным запуском...")
         time.sleep(15)
-        bot_thread()  # Рекурсивный перезапуск
+        bot_thread()
     finally:
         try:
             if not loop.is_closed():
@@ -475,10 +490,9 @@ def bot_thread():
             pass
         logger.warning("🔁 Перезапускаем поток бота...")
         time.sleep(5)
-        bot_thread()  # Гарантированный перезапуск
+        bot_thread()
 
 def main():
-    """Основная функция"""
     flask_app.start_time = time.time()
     
     logger.info("🚀 Запуск SecureShop Telegram Bot...")
@@ -490,18 +504,14 @@ def main():
     logger.info(f"👤 Основатель 1: {OWNER_ID_1} (@HiGki2pYYY)")
     logger.info(f"👤 Основатель 2: {OWNER_ID_2} (@oc33t)")
     
-    # Запускаем бота в отдельном потоке
     bot_thread_instance = threading.Thread(target=bot_thread)
     bot_thread_instance.daemon = True
     bot_thread_instance.start()
     
-    # Ждем немного для инициализации
     time.sleep(3)
     
-    # Запускаем пинговалку
     bot_instance.start_ping_service()
     
-    # Запускаем Flask сервер
     logger.info("🌐 Запуск Flask сервера...")
     flask_app.run(
         host='0.0.0.0',
