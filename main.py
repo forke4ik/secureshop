@@ -11,7 +11,7 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 # Конфигурация
-BOT_TOKEN = os.getenv('BOT_TOKEN')  # Токен бота из переменных окружения
+BOT_TOKEN = os.getenv('BOT_TOKEN', '8181378677:AAFullvwrNhPJMi_HxgC75qSEKWdKOtCpbw')  # Токен бота
 OWNER_ID = 7106925462  # ID основателя @HiGki2pYYY
 PORT = int(os.getenv('PORT', 8443))  # Порт для webhook
 
@@ -158,8 +158,8 @@ class TelegramBot:
         """Запуск бота с webhook для Render.com"""
         self.application.add_error_handler(self.error_handler)
         
-        # Получаем URL для webhook из переменных окружения
-        webhook_url = os.getenv('WEBHOOK_URL')  # Должен быть вида: https://your-app.render.com
+        # Получаем URL для webhook
+        webhook_url = os.getenv('WEBHOOK_URL', 'https://secureshop-3obw.onrender.com')  # Ваш URL
         
         if not webhook_url:
             logger.error("WEBHOOK_URL не задан в переменных окружения")
