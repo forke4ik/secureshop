@@ -5,6 +5,7 @@ import threading
 import time
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, MessageHandler, CallbackQueryHandler, filters, ContextTypes
+from telegram.error import Conflict
 from flask import Flask, request, jsonify
 
 # Настройка логирования
@@ -31,6 +32,7 @@ owner_client_map = {}
 telegram_app = None
 flask_app = Flask(__name__)
 bot_running = False
+bot_lock = threading.Lock()  # Блокировка для управления доступом к боту
 
 class TelegramBot:
     def __init__(self):
@@ -39,6 +41,7 @@ class TelegramBot:
         self.ping_running = False
         self.initialized = False
         self.polling_task = None
+        self.loop = None
     
     def setup_handlers(self):
         """Настройка обработчиков команд и сообщений"""
@@ -60,6 +63,11 @@ class TelegramBot:
     async def start_polling(self):
         """Запуск polling режима"""
         try:
+            # Проверка на случай конфликта
+            if self.application.updater.running:
+                logger.warning("🛑 Бот уже запущен! Пропускаем повторный запуск")
+                return
+            
             logger.info("🔄 Запуск polling режима...")
             await self.application.start()
             await self.application.updater.start_polling(
@@ -72,6 +80,11 @@ class TelegramBot:
                 pool_timeout=10
             )
             logger.info("✅ Polling запущен")
+        except Conflict as e:
+            logger.error(f"🚨 Конфликт: {e}")
+            logger.warning("🕒 Ожидаем 15 секунд перед повторной попыткой...")
+            await asyncio.sleep(15)
+            await self.start_polling()  # Рекурсивный перезапуск
         except Exception as e:
             logger.error(f"❌ Ошибка запуска polling: {e}")
             raise
@@ -79,10 +92,13 @@ class TelegramBot:
     async def stop_polling(self):
         """Остановка polling"""
         try:
-            if self.application.updater:
+            if self.application.updater and self.application.updater.running:
                 await self.application.updater.stop()
-            await self.application.stop()
-            logger.info("🛑 Polling остановлен")
+            if self.application.running:
+                await self.application.stop()
+            if self.application.post_init:
+                await self.application.shutdown()
+            logger.info("🛑 Polling полностью остановлен")
         except Exception as e:
             logger.error(f"❌ Ошибка остановки polling: {e}")
     
@@ -337,24 +353,6 @@ def health():
         'mode': 'polling' if USE_POLLING else 'webhook'
     }), 200
 
-@flask_app.route('/restart', methods=['POST'])
-def restart_bot():
-    """Перезапуск бота"""
-    global bot_running
-    try:
-        if bot_running:
-            # Останавливаем текущий бот
-            asyncio.create_task(bot_instance.stop_polling())
-            bot_running = False
-            time.sleep(2)
-        
-        # Запускаем снова
-        asyncio.create_task(start_bot())
-        return jsonify({'status': 'restarting'}), 200
-    except Exception as e:
-        logger.error(f"Ошибка перезапуска бота: {e}")
-        return jsonify({'error': str(e)}), 500
-
 # Webhook обработчик (если используется webhook режим)
 @flask_app.route(f'/{BOT_TOKEN}', methods=['POST'])
 def webhook():
@@ -418,48 +416,66 @@ async def start_bot():
     """Запуск бота"""
     global telegram_app, bot_running
     
-    try:
-        # Инициализируем приложение
-        await bot_instance.initialize()
-        telegram_app = bot_instance.application
+    with bot_lock:
+        if bot_running:
+            logger.warning("🛑 Бот уже запущен! Пропускаем повторный запуск")
+            return
         
-        if USE_POLLING:
-            # Polling режим
-            await setup_webhook()  # Удаляем webhook
-            await bot_instance.start_polling()
-            bot_running = True
-            logger.info("✅ Бот запущен в polling режиме")
-        else:
-            # Webhook режим
-            success = await setup_webhook()
-            if success:
+        try:
+            # Инициализируем приложение
+            await bot_instance.initialize()
+            telegram_app = bot_instance.application
+            
+            if USE_POLLING:
+                # Polling режим
+                await setup_webhook()  # Удаляем webhook
+                await bot_instance.start_polling()
                 bot_running = True
-                logger.info("✅ Бот запущен в webhook режиме")
+                logger.info("✅ Бот запущен в polling режиме")
             else:
-                logger.error("❌ Не удалось настроить webhook")
-                
-    except Exception as e:
-        logger.error(f"❌ Ошибка запуска бота: {e}")
-        bot_running = False
-        raise
+                # Webhook режим
+                success = await setup_webhook()
+                if success:
+                    bot_running = True
+                    logger.info("✅ Бот запущен в webhook режиме")
+                else:
+                    logger.error("❌ Не удалось настроить webhook")
+                    
+        except Exception as e:
+            logger.error(f"❌ Ошибка запуска бота: {e}")
+            bot_running = False
+            raise
 
 def bot_thread():
     """Поток для запуска бота"""
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
+    bot_instance.loop = loop
+    
     try:
         loop.run_until_complete(start_bot())
         if USE_POLLING:
             # Держим loop живым для polling
             loop.run_forever()
+    except Conflict as e:
+        logger.error(f"🚨 Критический конфликт: {e}")
+        logger.warning("🕒 Ожидаем 30 секунд перед повторным запуском...")
+        time.sleep(30)
+        bot_thread()  # Рекурсивный перезапуск
     except Exception as e:
         logger.error(f"❌ Критическая ошибка в bot_thread: {e}")
+        logger.warning("🕒 Ожидаем 15 секунд перед повторным запуском...")
+        time.sleep(15)
+        bot_thread()  # Рекурсивный перезапуск
     finally:
         try:
             if not loop.is_closed():
                 loop.close()
         except:
             pass
+        logger.warning("🔁 Перезапускаем поток бота...")
+        time.sleep(5)
+        bot_thread()  # Гарантированный перезапуск
 
 def main():
     """Основная функция"""
