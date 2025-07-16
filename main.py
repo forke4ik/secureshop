@@ -158,38 +158,4 @@ class TelegramBot:
                 cnt=update.message.text
                 sumo=f"✅ Контакти від {update.effective_user.full_name}: {cnt}\nСервіс: {conv['service']} {conv['plan']} {conv['term']} – {conv['price']}"
                 for o in [OWNER_ID_1,OWNER_ID_2]: await context.bot.send_message(o,sumo)
-                return await update.message.reply_text('Дякуємо! Ми зв'яжемося.')
-        else:
-            await self.start(update, context)
-
-    async def error_handler(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        logger.error(f"Error: {context.error}")
-
-    def start_ping(self):
-        def loop():
-            while bot_running:
-                try: requests.get(f"{WEBHOOK_URL}/ping")
-                except: pass
-                time.sleep(PING_INTERVAL)
-        threading.Thread(target=loop,daemon=True).start()
-
-bot=TelegramBot()
-
-@flask_app.route('/ping')
-def ping(): return jsonify(status='alive',uptime=time.time()-flask_app.start_time)
-@flask_app.route('/')
-def idx(): return jsonify(status='running')
-
-async def start_bot():
-    global bot_running
-    await bot.initialize()
-    if USE_POLLING:
-        await bot.start_polling(); bot_running=True
-    else:
-        await bot.application.bot.set_webhook(f"{WEBHOOK_URL}/{BOT_TOKEN}"); bot_running=True
-    bot.start_ping()
-
-if __name__=='__main__':
-    loop=asyncio.new_event_loop(); asyncio.set_event_loop(loop)
-    loop.run_until_complete(start_bot())
-    if USE_POLLING: loop.run_forever() else: flask_app.run(host='0.0.0.0',port=PORT)
+                return await update.message.reply_text("Дякуємо! Ми зв'яжемося.")
