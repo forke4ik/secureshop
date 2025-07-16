@@ -182,6 +182,7 @@ class TelegramBot:
             await query.edit_message_text(
                 "📦 Оберіть категорію товару:",
                 reply_markup=InlineKeyboardMarkup(keyboard)
+            )
         
         # Кнопка "Назад" в главное меню
         elif query.data == 'back_to_main':
@@ -191,7 +192,8 @@ class TelegramBot:
             ]
             await query.edit_message_text(
                 "Головне меню:",
-                reply_markup=InlineKeyboardMarkup(keyboard))
+                reply_markup=InlineKeyboardMarkup(keyboard)
+            )
         
         # Меню YouTube
         elif query.data == 'category_youtube':
@@ -202,7 +204,8 @@ class TelegramBot:
             ]
             await query.edit_message_text(
                 "📺 Оберіть варіант YouTube Premium:",
-                reply_markup=InlineKeyboardMarkup(keyboard))
+                reply_markup=InlineKeyboardMarkup(keyboard)
+            )
         
         # Меню ChatGPT
         elif query.data == 'category_chatgpt':
@@ -212,7 +215,8 @@ class TelegramBot:
             ]
             await query.edit_message_text(
                 "💬 Оберіть варіант ChatGPT Plus:",
-                reply_markup=InlineKeyboardMarkup(keyboard))
+                reply_markup=InlineKeyboardMarkup(keyboard)
+            )
         
         # Меню Spotify
         elif query.data == 'category_spotify':
@@ -223,7 +227,8 @@ class TelegramBot:
             ]
             await query.edit_message_text(
                 "🎵 Оберіть тип Spotify Premium:",
-                reply_markup=InlineKeyboardMarkup(keyboard))
+                reply_markup=InlineKeyboardMarkup(keyboard)
+            )
         
         # Подменю Spotify Individual
         elif query.data == 'spotify_individual':
@@ -236,7 +241,8 @@ class TelegramBot:
             ]
             await query.edit_message_text(
                 "👤 Spotify Premium Individual:",
-                reply_markup=InlineKeyboardMarkup(keyboard))
+                reply_markup=InlineKeyboardMarkup(keyboard)
+            )
         
         # Подменю Spotify Family
         elif query.data == 'spotify_family':
@@ -249,7 +255,8 @@ class TelegramBot:
             ]
             await query.edit_message_text(
                 "👨‍👩‍👧‍👦 Spotify Premium Family:",
-                reply_markup=InlineKeyboardMarkup(keyboard))
+                reply_markup=InlineKeyboardMarkup(keyboard)
+            )
         
         # Меню Discord
         elif query.data == 'category_discord':
@@ -260,7 +267,8 @@ class TelegramBot:
             ]
             await query.edit_message_text(
                 "🎮 Оберіть тип Discord Nitro:",
-                reply_markup=InlineKeyboardMarkup(keyboard))
+                reply_markup=InlineKeyboardMarkup(keyboard)
+            )
         
         # Подменю Discord Basic
         elif query.data == 'discord_basic':
@@ -271,7 +279,8 @@ class TelegramBot:
             ]
             await query.edit_message_text(
                 "🔹 Discord Nitro Basic:",
-                reply_markup=InlineKeyboardMarkup(keyboard))
+                reply_markup=InlineKeyboardMarkup(keyboard)
+            )
         
         # Подменю Discord Full
         elif query.data == 'discord_full':
@@ -282,7 +291,8 @@ class TelegramBot:
             ]
             await query.edit_message_text(
                 "✨ Discord Nitro Full:",
-                reply_markup=InlineKeyboardMarkup(keyboard))
+                reply_markup=InlineKeyboardMarkup(keyboard)
+            )
         
         # Обработка выбора товара
         elif query.data in [
@@ -309,7 +319,8 @@ class TelegramBot:
                 f"{product_info['name']}\n"
                 f"💵 Ціна: {product_info['price']} UAH\n\n"
                 f"Натисніть \"✅ Замовити\" для підтвердження замовлення.",
-                reply_markup=InlineKeyboardMarkup(keyboard))
+                reply_markup=InlineKeyboardMarkup(keyboard)
+            )
         
         # Подтверждение заказа
         elif query.data == 'confirm_order':
