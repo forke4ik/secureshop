@@ -448,7 +448,8 @@ async def setup_webhook_or_polling():
             logger.info("🗑️ Webhook удален - используется polling режим")
             bot_running = True
             logger.info("✅ Бот готов к запуску в режиме polling...")
-            await telegram_app.run_polling()
+            # Запускаем polling в отдельном потоке
+            threading.Thread(target=run_polling).start()
         else:
             webhook_url = f"{WEBHOOK_URL}/{BOT_TOKEN}"
             await telegram_app.bot.set_webhook(webhook_url)
@@ -460,31 +461,25 @@ async def setup_webhook_or_polling():
         logger.error(f"Ошибка инициализации бота: {e}")
         raise
 
-def run_bot_in_thread():
-    """Запускает бота в отдельном потоке с собственным event loop"""
-    logger.info("Запуск потока для Telegram бота...")
-    loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(loop)
-    
+def run_polling():
+    """Запускает polling в текущем потоке"""
     try:
-        loop.run_until_complete(setup_webhook_or_polling())
+        asyncio.run(bot_instance.application.run_polling())
     except Exception as e:
-        logger.error(f"Ошибка при запуске бота: {e}")
-    finally:
-        # Оставляем loop работать для режима polling
-        if USE_POLLING:
-            loop.run_forever()
+        logger.error(f"Ошибка при запуске polling: {e}")
 
 def main():
     logger.info("🚀 Запуск SecureShop Telegram Bot...")
     logger.info(f"🔑 BOT_TOKEN: {BOT_TOKEN[:10]}...")
     logger.info(f"🔄 РЕЖИМ: {'Polling' if USE_POLLING else 'Webhook'}")
 
-    # Запускаем бота в отдельном потоке, если используется Polling
+    # Запускаем бота
     if USE_POLLING:
-        bot_thread = threading.Thread(target=run_bot_in_thread)
-        bot_thread.daemon = True
-        bot_thread.start()
+        # Для polling запускаем в главном потоке
+        asyncio.run(setup_webhook_or_polling())
+    else:
+        # Для webhook запускаем в отдельном потоке
+        threading.Thread(target=asyncio.run, args=(setup_webhook_or_polling(),)).start()
     
     # Запускаем пинговалку, если URL задан
     if WEBHOOK_URL and not WEBHOOK_URL.isspace():
@@ -493,7 +488,6 @@ def main():
     # Запускаем Flask сервер в основном потоке
     logger.info("🌐 Запуск Flask сервера...")
     flask_app.run(host='0.0.0.0', port=PORT, debug=False, use_reloader=False)
-
 
 if __name__ == '__main__':
     main()
