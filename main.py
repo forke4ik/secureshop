@@ -32,7 +32,6 @@ owner_client_map = {}
 telegram_app = None
 flask_app = Flask(__name__)
 bot_running = False
-bot_lock = threading.Lock()
 
 class TelegramBot:
     # --- Карта деталей заказа для отправки администратору ---
@@ -59,8 +58,6 @@ class TelegramBot:
         self.setup_handlers()
         self.ping_running = False
         self.initialized = False
-        self.polling_task = None
-        self.loop = None
 
     # --- Генераторы клавиатур ---
     def get_start_keyboard(self):
@@ -155,6 +152,8 @@ class TelegramBot:
         self.application.add_error_handler(self.error_handler)
 
     async def initialize(self):
+        if self.initialized:
+            return
         try:
             await self.application.initialize()
             self.initialized = True
@@ -162,36 +161,6 @@ class TelegramBot:
         except Exception as e:
             logger.error(f"❌ Ошибка инициализации Telegram Application: {e}")
             raise
-
-    async def start_polling(self):
-        try:
-            if self.application.updater and self.application.updater.running:
-                logger.warning("🛑 Бот уже запущен! Пропускаем повторный запуск")
-                return
-            
-            logger.info("🔄 Запуск polling режима...")
-            await self.application.start()
-            await self.application.updater.start_polling(poll_interval=1.0, timeout=10)
-            logger.info("✅ Polling запущен")
-        except Conflict as e:
-            logger.error(f"🚨 Конфликт: {e}. Повторная попытка через 15 секунд...")
-            await asyncio.sleep(15)
-            await self.start_polling()
-        except Exception as e:
-            logger.error(f"❌ Ошибка запуска polling: {e}")
-            raise
-
-    async def stop_polling(self):
-        try:
-            if self.application.updater and self.application.updater.running:
-                await self.application.updater.stop()
-            if self.application.running:
-                await self.application.stop()
-            if self.application.post_init:
-                await self.application.shutdown()
-            logger.info("🛑 Polling полностью остановлен")
-        except Exception as e:
-            logger.error(f"❌ Ошибка остановки polling: {e}")
 
     async def start(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         user = update.effective_user
@@ -453,11 +422,11 @@ def health():
 async def webhook():
     if USE_POLLING:
         return jsonify({'error': 'Webhook disabled in polling mode'}), 400
-    if not telegram_app or not bot_instance.initialized:
+    if not bot_instance.initialized:
         return jsonify({'error': 'Bot not initialized'}), 500
     try:
-        update = Update.de_json(request.get_json(force=True), telegram_app.bot)
-        await telegram_app.process_update(update)
+        update = Update.de_json(request.get_json(force=True), bot_instance.application.bot)
+        await bot_instance.application.process_update(update)
         return '', 200
     except Exception as e:
         logger.error(f"Ошибка обработки webhook: {e}")
@@ -467,53 +436,55 @@ async def webhook():
 def index():
     return jsonify({'message': 'Telegram Bot SecureShop активен'}), 200
 
-async def setup_webhook():
-    global telegram_app
-    if not bot_instance.initialized:
-        await bot_instance.initialize()
+async def setup_webhook_or_polling():
+    global telegram_app, bot_running
+    
+    await bot_instance.initialize()
     telegram_app = bot_instance.application
-
+    
     if USE_POLLING:
         await telegram_app.bot.delete_webhook()
         logger.info("🗑️ Webhook удален - используется polling режим")
-        return
-    
-    webhook_url = f"{WEBHOOK_URL}/{BOT_TOKEN}"
-    await telegram_app.bot.set_webhook(webhook_url)
-    logger.info(f"✅ Webhook установлен: {webhook_url}")
-
-async def run_bot():
-    global bot_running
-    with bot_lock:
-        if bot_running:
-            logger.warning("🛑 Бот уже запущен! Пропускаем повторный запуск")
-            return
         bot_running = True
-
-    await setup_webhook()
-    
-    if USE_POLLING:
-        logger.info("✅ Бот запущен в polling режиме")
-        await bot_instance.start_polling()
+        logger.info("✅ Бот готов к запуску в режиме polling...")
+        # Запуск polling будет в отдельной функции, которая блокирует поток
+        await telegram_app.run_polling()
     else:
-        logger.info("✅ Бот запущен в webhook режиме")
+        webhook_url = f"{WEBHOOK_URL}/{BOT_TOKEN}"
+        await telegram_app.bot.set_webhook(webhook_url)
+        bot_running = True
+        logger.info(f"✅ Webhook установлен: {webhook_url}")
+        logger.info("✅ Бот запущен в режиме webhook")
 
-def run_flask():
-    flask_app.run(host='0.0.0.0', port=PORT, debug=False, use_reloader=False)
+def run_bot_in_thread():
+    """Эта функция запускает бота в отдельном потоке, чтобы не блокировать Flask."""
+    logger.info("Запуск потока для Telegram бота...")
+    asyncio.run(setup_webhook_or_polling())
 
 def main():
     logger.info("🚀 Запуск SecureShop Telegram Bot...")
     logger.info(f"🔑 BOT_TOKEN: {BOT_TOKEN[:10]}...")
     logger.info(f"🔄 РЕЖИМ: {'Polling' if USE_POLLING else 'Webhook'}")
 
+    # Запускаем бота в отдельном потоке, если используется Polling
     if USE_POLLING:
-        bot_thread = threading.Thread(target=lambda: asyncio.run(run_bot()))
+        bot_thread = threading.Thread(target=run_bot_in_thread)
         bot_thread.daemon = True
         bot_thread.start()
     
-    bot_instance.start_ping_service()
+    # Запускаем пинговалку, если URL задан
+    if WEBHOOK_URL and not WEBHOOK_URL.isspace():
+        bot_instance.start_ping_service()
     
-    run_flask()
+    # Запускаем Flask сервер в основном потоке
+    # Для webhook режима, бот будет обрабатывать запросы через Flask
+    if not USE_POLLING:
+        # В режиме webhook, инициализация происходит синхронно перед запуском Flask
+        asyncio.run(setup_webhook_or_polling())
+    
+    logger.info("🌐 Запуск Flask сервера...")
+    flask_app.run(host='0.0.0.0', port=PORT, debug=False, use_reloader=False)
+
 
 if __name__ == '__main__':
     main()
