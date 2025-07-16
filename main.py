@@ -1,7 +1,6 @@
 import logging
 import os
 import asyncio
-import aiohttp
 import threading
 import time
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
@@ -16,16 +15,16 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 # Конфигурация
-BOT_TOKEN = os.getenv('BOT_TOKEN', '8181378677:AAFullvwrNhPJMi_HxgC75qSEKWdKOtCpbw')  # Токен бота
-OWNER_ID_1 = 7106925462  # ID первого основателя @HiGki2pYYY
-OWNER_ID_2 = 6279578957  # ID второго основателя @oc33t
-PORT = int(os.getenv('PORT', 8443))  # Порт для webhook
-WEBHOOK_URL = os.getenv('WEBHOOK_URL', 'https://secureshop-3obw.onrender.com')  # URL для webhook
-PING_INTERVAL = int(os.getenv('PING_INTERVAL', 840))  # Интервал пинга в секундах (14 минут)
+BOT_TOKEN = os.getenv('BOT_TOKEN', '8181378677:AAFullvwrNhPJMi_HxgC75qSEKWdKOtCpbw')
+OWNER_ID_1 = 7106925462  # @HiGki2pYYY
+OWNER_ID_2 = 6279578957  # @oc33t
+PORT = int(os.getenv('PORT', 8443))
+WEBHOOK_URL = os.getenv('WEBHOOK_URL', 'https://secureshop-3obw.onrender.com')
+PING_INTERVAL = int(os.getenv('PING_INTERVAL', 840))  # 14 минут
 
 # Словари для хранения данных
-active_conversations = {}  # {client_id: {'type': 'order/question', 'user_info': user, 'assigned_owner': owner_id}}
-owner_client_map = {}  # {owner_id: client_id} - текущий клиент для каждого основателя
+active_conversations = {}
+owner_client_map = {}
 
 # Глобальная переменная для приложения
 telegram_app = None
@@ -84,9 +83,7 @@ class TelegramBot:
         
         user_id = query.from_user.id
         
-        # Кнопки для клиентов
         if query.data in ['order', 'question']:
-            # Инициализируем диалог с клиентом
             active_conversations[user_id] = {
                 'type': 'order' if query.data == 'order' else 'question',
                 'user_info': query.from_user,
@@ -100,16 +97,13 @@ class TelegramBot:
                 f"Я передам его основателю магазина."
             )
         
-        # Кнопка передачи чата другому основателю
         elif query.data.startswith('transfer_'):
             client_id = int(query.data.split('_')[1])
             current_owner = user_id
             
-            # Определяем другого основателя
             other_owner = OWNER_ID_2 if current_owner == OWNER_ID_1 else OWNER_ID_1
             other_owner_name = "@oc33t" if other_owner == OWNER_ID_2 else "@HiGki2pYYY"
             
-            # Обновляем назначение
             if client_id in active_conversations:
                 active_conversations[client_id]['assigned_owner'] = other_owner
                 owner_client_map[other_owner] = client_id
@@ -118,12 +112,10 @@ class TelegramBot:
                 
                 client_info = active_conversations[client_id]['user_info']
                 
-                # Уведомляем текущего основателя
                 await query.edit_message_text(
                     f"✅ Чат с клиентом {client_info.first_name} передан {other_owner_name}"
                 )
                 
-                # Уведомляем другого основателя
                 await context.bot.send_message(
                     chat_id=other_owner,
                     text=f"📨 Вам передан чат с клиентом:\n\n"
@@ -135,18 +127,14 @@ class TelegramBot:
     async def handle_message(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Обработчик текстовых сообщений"""
         user_id = update.effective_user.id
-        message_text = update.message.text
         
-        # Если сообщение от основателя - это ответ клиенту
         if user_id in [OWNER_ID_1, OWNER_ID_2]:
             await self.handle_owner_message(update, context)
             return
         
-        # Если сообщение от клиента
         if user_id in active_conversations:
             await self.forward_to_owner(update, context)
         else:
-            # Если диалог не активен, предлагаем начать
             keyboard = [
                 [InlineKeyboardButton("🛒 Зробити замовлення", callback_data='order')],
                 [InlineKeyboardButton("❓ Задати питання", callback_data='question')]
@@ -164,16 +152,13 @@ class TelegramBot:
         user_info = active_conversations[user_id]['user_info']
         conversation_type = active_conversations[user_id]['type']
         
-        # Выбираем основателя (приоритет первому, если не занят)
         assigned_owner = active_conversations[user_id]['assigned_owner']
         if not assigned_owner:
-            # Логика выбора основателя (можно улучшить)
-            assigned_owner = OWNER_ID_1  # По умолчанию первый
+            assigned_owner = OWNER_ID_1
             active_conversations[user_id]['assigned_owner'] = assigned_owner
         
         owner_client_map[assigned_owner] = user_id
         
-        # Формируем сообщение для основателя
         type_emoji = "🛒" if conversation_type == 'order' else "❓"
         type_text = "ЗАКАЗ" if conversation_type == 'order' else "ВОПРОС"
         owner_name = "@HiGki2pYYY" if assigned_owner == OWNER_ID_1 else "@oc33t"
@@ -193,20 +178,17 @@ class TelegramBot:
 Назначен: {owner_name}
         """
         
-        # Создаем кнопку для передачи другому основателю
         keyboard = [
             [InlineKeyboardButton("🔄 Передать другому основателю", callback_data=f'transfer_{user_id}')]
         ]
         reply_markup = InlineKeyboardMarkup(keyboard)
         
-        # Отправляем основателю
         await context.bot.send_message(
             chat_id=assigned_owner,
             text=forward_message.strip(),
             reply_markup=reply_markup
         )
         
-        # Подтверждаем клиенту
         await update.message.reply_text(
             "✅ Ваше сообщение передано основателю магазина. "
             "Ожидайте ответа в ближайшее время."
@@ -216,7 +198,6 @@ class TelegramBot:
         """Обработка сообщений от основателя"""
         owner_id = update.effective_user.id
         
-        # Проверяем, есть ли у основателя активный клиент
         if owner_id not in owner_client_map:
             owner_name = "@HiGki2pYYY" if owner_id == OWNER_ID_1 else "@oc33t"
             await update.message.reply_text(
@@ -227,7 +208,6 @@ class TelegramBot:
         
         client_id = owner_client_map[owner_id]
         
-        # Проверяем, что клиент еще в активных диалогах
         if client_id not in active_conversations:
             del owner_client_map[owner_id]
             await update.message.reply_text(
@@ -235,14 +215,12 @@ class TelegramBot:
             )
             return
         
-        # Отправляем ответ клиенту
         try:
             await context.bot.send_message(
                 chat_id=client_id,
                 text=f"📩 Ответ от магазина:\n\n{update.message.text}"
             )
             
-            # Подтверждаем основателю
             client_info = active_conversations[client_id]['user_info']
             await update.message.reply_text(
                 f"✅ Сообщение отправлено клиенту {client_info.first_name}"
@@ -266,10 +244,10 @@ class TelegramBot:
             ping_thread = threading.Thread(target=self.ping_loop)
             ping_thread.daemon = True
             ping_thread.start()
-            logger.info("Пинговалка запущена")
+            logger.info("🔄 Пинговалка запущена")
     
     def ping_loop(self):
-        """Цикл пинга в отдельном потоке"""
+        """Цикл пинга сервиса"""
         import requests
         ping_url = f"{WEBHOOK_URL}/ping"
         
@@ -277,11 +255,13 @@ class TelegramBot:
             try:
                 response = requests.get(ping_url, timeout=10)
                 if response.status_code == 200:
-                    logger.info("✅ Ping успешен")
+                    logger.info("✅ Ping успешен - сервис активен")
                 else:
                     logger.warning(f"⚠️ Ping вернул статус {response.status_code}")
-            except Exception as e:
+            except requests.exceptions.RequestException as e:
                 logger.error(f"❌ Ошибка ping: {e}")
+            except Exception as e:
+                logger.error(f"❌ Неожиданная ошибка ping: {e}")
             
             time.sleep(PING_INTERVAL)
 
@@ -291,21 +271,24 @@ bot_instance = TelegramBot()
 # Flask маршруты
 @flask_app.route('/ping', methods=['GET'])
 def ping():
-    """Эндпоинт для пинга"""
+    """Эндпоинт для поддержания активности"""
     return jsonify({
-        'status': 'alive', 
+        'status': 'alive',
         'message': 'Bot is running',
-        'timestamp': time.time()
+        'timestamp': time.time(),
+        'uptime': time.time() - flask_app.start_time if hasattr(flask_app, 'start_time') else 0
     }), 200
 
 @flask_app.route('/health', methods=['GET'])
 def health():
-    """Эндпоинт для проверки здоровья"""
+    """Эндпоинт для проверки состояния"""
     return jsonify({
         'status': 'healthy',
-        'bot_token': BOT_TOKEN[:10] + '...',
+        'bot_token': f"{BOT_TOKEN[:10]}..." if BOT_TOKEN else "Not set",
         'active_conversations': len(active_conversations),
-        'owner_client_map': len(owner_client_map)
+        'owner_client_map': len(owner_client_map),
+        'ping_interval': PING_INTERVAL,
+        'webhook_url': WEBHOOK_URL
     }), 200
 
 @flask_app.route(f'/{BOT_TOKEN}', methods=['POST'])
@@ -314,13 +297,13 @@ def webhook():
     global telegram_app
     
     if not telegram_app:
+        logger.error("Telegram app не инициализирован")
         return jsonify({'error': 'Bot not initialized'}), 500
     
     try:
         json_data = request.get_json()
         if json_data:
             update = Update.de_json(json_data, telegram_app.bot)
-            # Создаем новый event loop для обработки обновления
             loop = asyncio.new_event_loop()
             asyncio.set_event_loop(loop)
             try:
@@ -336,10 +319,11 @@ def webhook():
 def index():
     """Главная страница"""
     return jsonify({
-        'message': 'Telegram Bot is running',
-        'status': 'active',
+        'message': 'Telegram Bot SecureShop активен',
+        'status': 'running',
         'webhook_url': f"{WEBHOOK_URL}/{BOT_TOKEN}",
-        'ping_interval': PING_INTERVAL
+        'ping_interval': f"{PING_INTERVAL} секунд",
+        'owners': ['@HiGki2pYYY', '@oc33t']
     }), 200
 
 async def setup_webhook():
@@ -355,19 +339,20 @@ async def setup_webhook():
 
 def main():
     """Основная функция"""
-    logger.info("🚀 Запуск бота...")
-    logger.info(f"BOT_TOKEN: {BOT_TOKEN[:10]}...")
-    logger.info(f"PORT: {PORT}")
-    logger.info(f"WEBHOOK_URL: {WEBHOOK_URL}")
-    logger.info(f"PING_INTERVAL: {PING_INTERVAL} секунд")
-    logger.info(f"Основатель 1: {OWNER_ID_1}")
-    logger.info(f"Основатель 2: {OWNER_ID_2}")
+    flask_app.start_time = time.time()
     
-    # Инициализируем бота
+    logger.info("🚀 Запуск SecureShop Telegram Bot...")
+    logger.info(f"🔑 BOT_TOKEN: {BOT_TOKEN[:10]}...")
+    logger.info(f"🌐 PORT: {PORT}")
+    logger.info(f"📡 WEBHOOK_URL: {WEBHOOK_URL}")
+    logger.info(f"⏰ PING_INTERVAL: {PING_INTERVAL} секунд")
+    logger.info(f"👤 Основатель 1: {OWNER_ID_1} (@HiGki2pYYY)")
+    logger.info(f"👤 Основатель 2: {OWNER_ID_2} (@oc33t)")
+    
     global telegram_app
     telegram_app = bot_instance.application
     
-    # Настраиваем webhook в отдельном потоке
+    # Настраиваем webhook
     def setup_webhook_thread():
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
@@ -377,6 +362,8 @@ def main():
                 logger.info("✅ Webhook успешно настроен")
             else:
                 logger.error("❌ Не удалось настроить webhook")
+        except Exception as e:
+            logger.error(f"❌ Ошибка в потоке webhook: {e}")
         finally:
             loop.close()
     
