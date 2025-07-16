@@ -308,16 +308,36 @@ def start_webhook_loop():
     global webhook_loop
     webhook_loop = asyncio.new_event_loop()
     asyncio.set_event_loop(webhook_loop)
-    webhook_loop.run_forever()
+    try:
+        webhook_loop.run_forever()
+    except Exception as e:
+        logger.error(f"Ошибка в webhook event loop: {e}")
+    finally:
+        if not webhook_loop.is_closed():
+            webhook_loop.close()
 
 def run_async_in_webhook_loop(coro):
-    """Запуск coroutine в webhook event loop"""
+    """Запуск coroutine в webhook event loop с улучшенной обработкой ошибок"""
     global webhook_loop
-    if webhook_loop and not webhook_loop.is_closed():
-        future = asyncio.run_coroutine_threadsafe(coro, webhook_loop)
-        return future.result(timeout=30)  # 30 секунд timeout
-    else:
-        raise RuntimeError("Webhook event loop не запущен")
+    
+    if not webhook_loop or webhook_loop.is_closed():
+        logger.error("Webhook event loop не запущен или закрыт")
+        return None
+    
+    try:
+        # Проверяем, что loop все еще работает
+        if webhook_loop.is_running():
+            future = asyncio.run_coroutine_threadsafe(coro, webhook_loop)
+            return future.result(timeout=30)
+        else:
+            logger.error("Webhook event loop не запущен")
+            return None
+    except asyncio.TimeoutError:
+        logger.error("Timeout при выполнении coroutine в webhook loop")
+        return None
+    except Exception as e:
+        logger.error(f"Ошибка при выполнении coroutine в webhook loop: {e}")
+        return None
 
 @flask_app.route(f'/{BOT_TOKEN}', methods=['POST'])
 def webhook():
@@ -334,7 +354,11 @@ def webhook():
             update = Update.de_json(json_data, telegram_app.bot)
             
             # Запускаем обработку в webhook event loop
-            run_async_in_webhook_loop(telegram_app.process_update(update))
+            result = run_async_in_webhook_loop(telegram_app.process_update(update))
+            
+            if result is None:
+                logger.warning("Не удалось обработать update в webhook loop")
+                return jsonify({'error': 'Processing failed'}), 500
             
         return '', 200
     except Exception as e:
