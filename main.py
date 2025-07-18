@@ -87,7 +87,8 @@ class TelegramBot:
             ("help", "Допомога та інформація"),
             ("order", "Зробити замовлення"),
             ("question", "Поставити запитання"),
-            ("channel", "Наш головний канал")
+            ("channel", "Наш головний канал"),
+            ("stop", "Завершити поточний діалог")
         ]
         await self.application.bot.set_my_commands(commands)
     
@@ -99,7 +100,7 @@ class TelegramBot:
         self.application.add_handler(CommandHandler("help", self.show_help))
         self.application.add_handler(CommandHandler("channel", self.channel_command))
         self.application.add_handler(CommandHandler("order", self.order_command))
-        self.application.add_handler(CommandHandler("question", self.question_command))  # Добавлен обработчик команды /question
+        self.application.add_handler(CommandHandler("question", self.question_command))
         self.application.add_handler(CallbackQueryHandler(self.button_handler))
         self.application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, self.handle_message))
         self.application.add_error_handler(self.error_handler)
@@ -210,6 +211,7 @@ class TelegramBot:
 /order - Зробити замовлення
 /question - Поставити запитання
 /channel - Наш канал з асортиментом, оновленнями та розіграшами
+/stop - Завершити поточний діалог
 /help - Ця довідка
 
 💬 Якщо у вас виникли питання, не соромтеся звертатися!
@@ -263,7 +265,9 @@ class TelegramBot:
         # Проверяем активные диалоги
         if user_id in active_conversations:
             await update.message.reply_text(
-                "❗ У вас уже есть активный диалог. Завершите текущий диалог перед началом нового."
+                "❗ У вас вже є активний діалог.\n\n"
+                "Будь ласка, продовжуйте писати в поточному діалозі або завершіть його командою /stop, "
+                "якщо хочете почати новий діалог."
             )
             return
         
@@ -280,41 +284,68 @@ class TelegramBot:
         save_stats()
         
         await update.message.reply_text(
-            "📝 Напишіть ваше запитання. Я передам його засновнику магазину."
+            "📝 Напишіть ваше запитання. Я передам його засновнику магазину.\n\n"
+            "Щоб завершити цей діалог пізніше, використайте команду /stop."
         )
     
     async def stop_conversation(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Обработчик команды /stop для основателей"""
-        owner_id = update.effective_user.id
+        """Обработчик команды /stop для завершения диалогов"""
+        user_id = update.effective_user.id
+        user_name = update.effective_user.first_name
 
-        if owner_id not in [OWNER_ID_1, OWNER_ID_2]:
+        # Для основателей: завершение диалога с клиентом
+        if user_id in [OWNER_ID_1, OWNER_ID_2] and user_id in owner_client_map:
+            client_id = owner_client_map[user_id]
+            client_info = active_conversations.get(client_id, {}).get('user_info')
+
+            try:
+                await context.bot.send_message(
+                    chat_id=client_id,
+                    text="Діалог завершено представником магазину. Якщо у вас є нові питання, будь ласка, скористайтесь командою /start."
+                )
+                if client_info:
+                    await update.message.reply_text(f"✅ Ви успішно завершили діалог з клієнтом {client_info.first_name}.")
+                else:
+                    await update.message.reply_text(f"✅ Ви успішно завершили діалог з клієнтом ID {client_id}.")
+
+            except Exception as e:
+                logger.error(f"Помилка при сповіщенні клієнта {client_id} про завершення діалогу: {e}")
+                await update.message.reply_text("Не вдалося сповістити клієнта (можливо, він заблокував бота), але діалог було завершено з вашого боку.")
+
+            if client_id in active_conversations:
+                del active_conversations[client_id]
+            if user_id in owner_client_map:
+                del owner_client_map[user_id]
             return
 
-        if owner_id not in owner_client_map:
-            await update.message.reply_text("У вас нет активного диалога для завершения.")
-            return
+        # Для обычных пользователей: завершение своего диалога
+        if user_id in active_conversations:
+            # Уведомляем основателя, если диалог был назначен
+            if 'assigned_owner' in active_conversations[user_id]:
+                owner_id = active_conversations[user_id]['assigned_owner']
+                try:
+                    await context.bot.send_message(
+                        chat_id=owner_id,
+                        text=f"ℹ️ Клієнт {user_name} завершив діалог командою /stop."
+                    )
+                    if owner_id in owner_client_map:
+                        del owner_client_map[owner_id]
+                except Exception as e:
+                    logger.error(f"Помилка сповіщення власника {owner_id}: {e}")
 
-        client_id = owner_client_map[owner_id]
-        client_info = active_conversations.get(client_id, {}).get('user_info')
-
-        try:
-            await context.bot.send_message(
-                chat_id=client_id,
-                text="Діалог завершено представником магазину. Якщо у вас є нові питання, будь ласка, скористайтесь командою /start."
+            # Удаляем диалог
+            del active_conversations[user_id]
+            await update.message.reply_text(
+                "✅ Ваш діалог завершено.\n\n"
+                "Ви можете розпочати новий діалог за допомогою /start."
             )
-            if client_info:
-                await update.message.reply_text(f"✅ Вы успешно завершили диалог с клиентом {client_info.first_name}.")
-            else:
-                await update.message.reply_text(f"✅ Вы успешно завершили диалог с клиентом ID {client_id}.")
+            return
 
-        except Exception as e:
-            logger.error(f"Ошибка при уведомлении клиента {client_id} о завершении диалога: {e}")
-            await update.message.reply_text("Не удалось уведомить клиента (возможно, он заблокировал бота), но диалог был завершен на вашей стороне.")
-
-        if client_id in active_conversations:
-            del active_conversations[client_id]
-        if owner_id in owner_client_map:
-            del owner_client_map[owner_id]
+        # Если нет активного диалога
+        await update.message.reply_text(
+            "ℹ️ У вас немає активного діалогу для завершення.\n\n"
+            "Щоб розпочати новий діалог, використовуйте /start."
+        )
     
     async def show_stats(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Показать статистику для основателей"""
@@ -544,7 +575,12 @@ class TelegramBot:
         elif query.data == 'question':
             # Проверяем активные диалоги
             if user_id in active_conversations:
-                await query.answer("❗ У вас уже есть активный диалог", show_alert=True)
+                await query.answer(
+                    "❗ У вас вже є активний діалог.\n\n"
+                    "Будь ласка, продовжуйте писати в поточному діалозі або завершіть його командою /stop, "
+                    "якщо хочете почати новий діалог.",
+                    show_alert=True
+                )
                 return
             
             active_conversations[user_id] = {
@@ -559,7 +595,8 @@ class TelegramBot:
             save_stats()
             
             await query.edit_message_text(
-                "📝 Напишіть ваше запитання. Я передам його засновнику магазину."
+                "📝 Напишіть ваше запитання. Я передам його засновнику магазину.\n\n"
+                "Щоб завершити цей діалог пізніше, використайте команду /stop."
             )
         
         # Взятие заказа основателем
