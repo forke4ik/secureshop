@@ -80,11 +80,26 @@ class TelegramBot:
         self.polling_task = None
         self.loop = None
     
+    async def set_commands_menu(self):
+        """Установка стандартного меню команд"""
+        commands = [
+            ("start", "Головне меню"),
+            ("help", "Допомога та інформація"),
+            ("order", "Зробити замовлення"),
+            ("question", "Поставити запитання"),
+            ("channel", "Наш головний канал")
+        ]
+        await self.application.bot.set_my_commands(commands)
+    
     def setup_handlers(self):
         """Настройка обработчиков команд и сообщений"""
         self.application.add_handler(CommandHandler("start", self.start))
         self.application.add_handler(CommandHandler("stop", self.stop_conversation))
         self.application.add_handler(CommandHandler("stats", self.show_stats))
+        self.application.add_handler(CommandHandler("help", self.show_help))
+        self.application.add_handler(CommandHandler("channel", self.channel_command))
+        # Добавлен обработчик команды /order
+        self.application.add_handler(CommandHandler("order", self.order_command))
         self.application.add_handler(CallbackQueryHandler(self.button_handler))
         self.application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, self.handle_message))
         self.application.add_error_handler(self.error_handler)
@@ -93,6 +108,7 @@ class TelegramBot:
         """Асинхронная инициализация приложения"""
         try:
             await self.application.initialize()
+            await self.set_commands_menu()
             self.initialized = True
             logger.info("✅ Telegram Application инициализирован")
         except Exception as e:
@@ -160,7 +176,8 @@ class TelegramBot:
         
         keyboard = [
             [InlineKeyboardButton("🛒 Зробити замовлення", callback_data='order')],
-            [InlineKeyboardButton("❓ Поставити запитання", callback_data='question')]
+            [InlineKeyboardButton("❓ Поставити запитання", callback_data='question')],
+            [InlineKeyboardButton("ℹ️ Допомога", callback_data='help')]
         ]
         reply_markup = InlineKeyboardMarkup(keyboard)
         
@@ -173,6 +190,70 @@ class TelegramBot:
         await update.message.reply_text(
             welcome_message.strip(),
             reply_markup=reply_markup
+        )
+    
+    async def show_help(self, update: Update, context: ContextTypes.DEFAULT_TYPE = None):
+        """Показывает справку и информацию о сервисе"""
+        # Универсальный метод для обработки команды и кнопки
+        if isinstance(update, Update):
+            message = update.message
+        else:
+            message = update  # для вызова из кнопки
+        
+        help_text = """
+👋 Доброго дня! Я бот магазину SecureShop.
+
+🔐 Наш сервіс купує підписки на ваш готовий акаунт, а не дає вам свій. Ми дуже стараємось бути з клієнтами, тому відповіді на будь-які питання по нашому сервісу можна задавати цілодобово.
+
+📌 Список доступних команд:
+/start - Головне меню
+/order - Зробити замовлення
+/question - Поставити запитання
+/channel - Наш канал з асортиментом, оновленнями та розіграшами
+/help - Ця довідка
+
+💬 Якщо у вас виникли питання, не соромтеся звертатися!
+        """
+        await message.reply_text(help_text.strip())
+    
+    async def channel_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Отправляет ссылку на основной канал"""
+        keyboard = [[
+            InlineKeyboardButton(
+                "📢 Перейти в SecureShopUA", 
+                url="https://t.me/SecureShopUA"
+            )
+        ]]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        
+        message_text = """
+📢 Наш головний канал з асортиментом, оновленнями та розіграшами:
+
+👉 Тут ви знайдете:
+- 🆕 Актуальні товари та послуги
+- 🔥 Спеціальні пропозиції та знижки
+- 🎁 Розіграші та акції
+- ℹ️ Важливі оновлення сервісу
+
+Приєднуйтесь, щоб бути в курсі всіх новин! 👇
+        """
+        await update.message.reply_text(
+            message_text.strip(),
+            reply_markup=reply_markup
+        )
+    
+    async def order_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Обработчик команды /order"""
+        keyboard = [
+            [InlineKeyboardButton("📺 YouTube", callback_data='category_youtube')],
+            [InlineKeyboardButton("💬 ChatGPT", callback_data='category_chatgpt')],
+            [InlineKeyboardButton("🎵 Spotify", callback_data='category_spotify')],
+            [InlineKeyboardButton("🎮 Discord", callback_data='category_discord')],
+            [InlineKeyboardButton("⬅️ Назад", callback_data='back_to_main')]
+        ]
+        await update.message.reply_text(
+            "📦 Оберіть категорію товару:",
+            reply_markup=InlineKeyboardMarkup(keyboard)
         )
     
     async def stop_conversation(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -256,12 +337,17 @@ class TelegramBot:
         elif query.data == 'back_to_main':
             keyboard = [
                 [InlineKeyboardButton("🛒 Зробити замовлення", callback_data='order')],
-                [InlineKeyboardButton("❓ Поставити запитання", callback_data='question')]
+                [InlineKeyboardButton("❓ Поставити запитання", callback_data='question')],
+                [InlineKeyboardButton("ℹ️ Допомога", callback_data='help')]
             ]
             await query.edit_message_text(
                 "Головне меню:",
                 reply_markup=InlineKeyboardMarkup(keyboard)
             )
+        
+        # Обработка кнопки "help"
+        elif query.data == 'help':
+            await self.show_help(query.message)
         
         # Меню YouTube
         elif query.data == 'category_youtube':
@@ -519,7 +605,8 @@ class TelegramBot:
         else:
             keyboard = [
                 [InlineKeyboardButton("🛒 Зробити замовлення", callback_data='order')],
-                [InlineKeyboardButton("❓ Поставити запитання", callback_data='question')]
+                [InlineKeyboardButton("❓ Поставити запитання", callback_data='question')],
+                [InlineKeyboardButton("ℹ️ Допомога", callback_data='help')]
             ]
             reply_markup = InlineKeyboardMarkup(keyboard)
             
@@ -941,6 +1028,11 @@ def auto_save_loop():
         logger.info("✅ Статистика автосохранена")
 
 def main():
+    # Задержка для Render.com, чтобы избежать конфликтов
+    if os.environ.get('RENDER'):
+        logger.info("⏳ Ожидаем 10 секунд для предотвращения конфликтов...")
+        time.sleep(10)
+    
     # Запускаем автосохранение
     auto_save_thread = threading.Thread(target=auto_save_loop)
     auto_save_thread.daemon = True
