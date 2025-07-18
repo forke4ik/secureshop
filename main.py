@@ -98,8 +98,8 @@ class TelegramBot:
         self.application.add_handler(CommandHandler("stats", self.show_stats))
         self.application.add_handler(CommandHandler("help", self.show_help))
         self.application.add_handler(CommandHandler("channel", self.channel_command))
-        # Добавлен обработчик команды /order
         self.application.add_handler(CommandHandler("order", self.order_command))
+        self.application.add_handler(CommandHandler("question", self.question_command))  # Добавлен обработчик команды /question
         self.application.add_handler(CallbackQueryHandler(self.button_handler))
         self.application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, self.handle_message))
         self.application.add_error_handler(self.error_handler)
@@ -254,6 +254,33 @@ class TelegramBot:
         await update.message.reply_text(
             "📦 Оберіть категорію товару:",
             reply_markup=InlineKeyboardMarkup(keyboard)
+        )
+    
+    async def question_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Обработчик команды /question"""
+        user_id = update.effective_user.id
+        
+        # Проверяем активные диалоги
+        if user_id in active_conversations:
+            await update.message.reply_text(
+                "❗ У вас уже есть активный диалог. Завершите текущий диалог перед началом нового."
+            )
+            return
+        
+        # Создаем запись о вопросе
+        active_conversations[user_id] = {
+            'type': 'question',
+            'user_info': update.effective_user,
+            'assigned_owner': None,
+            'last_message': "Нове запитання"
+        }
+        
+        # Обновляем статистику
+        bot_statistics['total_questions'] += 1
+        save_stats()
+        
+        await update.message.reply_text(
+            "📝 Напишіть ваше запитання. Я передам його засновнику магазину."
         )
     
     async def stop_conversation(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -515,6 +542,11 @@ class TelegramBot:
         
         # Обработка кнопки "question"
         elif query.data == 'question':
+            # Проверяем активные диалоги
+            if user_id in active_conversations:
+                await query.answer("❗ У вас уже есть активный диалог", show_alert=True)
+                return
+            
             active_conversations[user_id] = {
                 'type': 'question',
                 'user_info': query.from_user,
