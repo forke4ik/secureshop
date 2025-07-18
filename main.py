@@ -96,8 +96,10 @@ class TelegramBot:
         self.application.add_handler(CommandHandler("start", self.start))
         self.application.add_handler(CommandHandler("stop", self.stop_conversation))
         self.application.add_handler(CommandHandler("stats", self.show_stats))
-        self.application.add_handler(CommandHandler("help", self.help_command))
+        self.application.add_handler(CommandHandler("help", self.show_help))
         self.application.add_handler(CommandHandler("channel", self.channel_command))
+        # Добавлен обработчик команды /order
+        self.application.add_handler(CommandHandler("order", self.order_command))
         self.application.add_handler(CallbackQueryHandler(self.button_handler))
         self.application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, self.handle_message))
         self.application.add_error_handler(self.error_handler)
@@ -190,8 +192,14 @@ class TelegramBot:
             reply_markup=reply_markup
         )
     
-    async def help_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+    async def show_help(self, update: Update, context: ContextTypes.DEFAULT_TYPE = None):
         """Показывает справку и информацию о сервисе"""
+        # Универсальный метод для обработки команды и кнопки
+        if isinstance(update, Update):
+            message = update.message
+        else:
+            message = update  # для вызова из кнопки
+        
         help_text = """
 👋 Доброго дня! Я бот магазину SecureShop.
 
@@ -206,7 +214,7 @@ class TelegramBot:
 
 💬 Якщо у вас виникли питання, не соромтеся звертатися!
         """
-        await update.message.reply_text(help_text.strip())
+        await message.reply_text(help_text.strip())
     
     async def channel_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Отправляет ссылку на основной канал"""
@@ -232,6 +240,20 @@ class TelegramBot:
         await update.message.reply_text(
             message_text.strip(),
             reply_markup=reply_markup
+        )
+    
+    async def order_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Обработчик команды /order"""
+        keyboard = [
+            [InlineKeyboardButton("📺 YouTube", callback_data='category_youtube')],
+            [InlineKeyboardButton("💬 ChatGPT", callback_data='category_chatgpt')],
+            [InlineKeyboardButton("🎵 Spotify", callback_data='category_spotify')],
+            [InlineKeyboardButton("🎮 Discord", callback_data='category_discord')],
+            [InlineKeyboardButton("⬅️ Назад", callback_data='back_to_main')]
+        ]
+        await update.message.reply_text(
+            "📦 Оберіть категорію товару:",
+            reply_markup=InlineKeyboardMarkup(keyboard)
         )
     
     async def stop_conversation(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -325,7 +347,7 @@ class TelegramBot:
         
         # Обработка кнопки "help"
         elif query.data == 'help':
-            await self.help_command(update, context)
+            await self.show_help(query.message)
         
         # Меню YouTube
         elif query.data == 'category_youtube':
@@ -1006,6 +1028,11 @@ def auto_save_loop():
         logger.info("✅ Статистика автосохранена")
 
 def main():
+    # Задержка для Render.com, чтобы избежать конфликтов
+    if os.environ.get('RENDER'):
+        logger.info("⏳ Ожидаем 10 секунд для предотвращения конфликтов...")
+        time.sleep(10)
+    
     # Запускаем автосохранение
     auto_save_thread = threading.Thread(target=auto_save_loop)
     auto_save_thread.daemon = True
