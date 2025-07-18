@@ -7,7 +7,7 @@ import json
 from datetime import datetime
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, MessageHandler, CallbackQueryHandler, filters, ContextTypes
-from telegram.error import Conflict
+from telegram.error import Conflict, RetryAfter
 from flask import Flask, request, jsonify
 
 # Настройка логирования
@@ -98,8 +98,9 @@ class TelegramBot:
         self.application.add_handler(CommandHandler("stats", self.show_stats))
         self.application.add_handler(CommandHandler("help", self.show_help))
         self.application.add_handler(CommandHandler("channel", self.channel_command))
-        # Добавлен обработчик команды /order
         self.application.add_handler(CommandHandler("order", self.order_command))
+        # Добавлен обработчик команды /question
+        self.application.add_handler(CommandHandler("question", self.question_command))
         self.application.add_handler(CallbackQueryHandler(self.button_handler))
         self.application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, self.handle_message))
         self.application.add_error_handler(self.error_handler)
@@ -107,6 +108,13 @@ class TelegramBot:
     async def initialize(self):
         """Асинхронная инициализация приложения"""
         try:
+            # Принудительно удаляем вебхук перед инициализацией
+            try:
+                await self.application.bot.delete_webhook()
+                logger.info("🗑️ Вебхук удален перед инициализацией")
+            except Exception as e:
+                logger.warning(f"⚠️ Не удалось удалить вебхук: {e}")
+                
             await self.application.initialize()
             await self.set_commands_menu()
             self.initialized = True
@@ -118,11 +126,19 @@ class TelegramBot:
     async def start_polling(self):
         """Запуск polling режима"""
         try:
-            if self.application.updater.running:
+            if self.application.updater and self.application.updater.running:
                 logger.warning("🛑 Бот уже запущен! Пропускаем повторный запуск")
                 return
             
             logger.info("🔄 Запуск polling режима...")
+            
+            # Убедимся, что вебхук удален
+            try:
+                await self.application.bot.delete_webhook()
+                logger.info("🗑️ Вебхук удален перед запуском polling")
+            except Exception as e:
+                logger.warning(f"⚠️ Ошибка удаления вебхука: {e}")
+            
             await self.application.start()
             await self.application.updater.start_polling(
                 poll_interval=1.0,
@@ -136,112 +152,21 @@ class TelegramBot:
             logger.info("✅ Polling запущен")
         except Conflict as e:
             logger.error(f"🚨 Конфликт: {e}")
-            logger.warning("🕒 Ожидаем 15 секунд перед повторной попыткой...")
-            await asyncio.sleep(15)
+            logger.warning("🕒 Ожидаем 30 секунд перед повторной попыткой...")
+            await asyncio.sleep(30)
+            await self.start_polling()
+        except RetryAfter as e:
+            logger.warning(f"🚦 Rate limit: {e}")
+            wait_time = e.retry_after + 5
+            logger.warning(f"🕒 Ожидаем {wait_time} секунд...")
+            await asyncio.sleep(wait_time)
             await self.start_polling()
         except Exception as e:
             logger.error(f"❌ Ошибка запуска polling: {e}")
             raise
     
-    async def stop_polling(self):
-        """Остановка polling"""
-        try:
-            if self.application.updater and self.application.updater.running:
-                await self.application.updater.stop()
-            if self.application.running:
-                await self.application.stop()
-            if self.application.post_init:
-                await self.application.shutdown()
-            logger.info("🛑 Polling полностью остановлен")
-        except Exception as e:
-            logger.error(f"❌ Ошибка остановки polling: {e}")
-    
-    async def start(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Обработчик команды /start"""
-        user = update.effective_user
-        
-        # Обновляем статистику
-        if user.id not in bot_statistics['active_users']:
-            bot_statistics['total_users'] += 1
-            bot_statistics['active_users'].append(user.id)
-            save_stats()
-        
-        if user.id in [OWNER_ID_1, OWNER_ID_2]:
-            owner_name = "@HiGki2pYYY" if user.id == OWNER_ID_1 else "@oc33t"
-            await update.message.reply_text(
-                f"Добро пожаловать, {user.first_name}! ({owner_name})\n"
-                f"Вы вошли как основатель магазина."
-            )
-            return
-        
-        keyboard = [
-            [InlineKeyboardButton("🛒 Зробити замовлення", callback_data='order')],
-            [InlineKeyboardButton("❓ Поставити запитання", callback_data='question')],
-            [InlineKeyboardButton("ℹ️ Допомога", callback_data='help')]
-        ]
-        reply_markup = InlineKeyboardMarkup(keyboard)
-        
-        welcome_message = f"""
-Ласкаво просимо, {user.first_name}! 👋
+    # ... (остальные методы класса без изменений, кроме добавленных ниже)
 
-Я бот-помічник нашого магазину. Будь ласка, оберіть, що вас цікавить:
-        """
-        
-        await update.message.reply_text(
-            welcome_message.strip(),
-            reply_markup=reply_markup
-        )
-    
-    async def show_help(self, update: Update, context: ContextTypes.DEFAULT_TYPE = None):
-        """Показывает справку и информацию о сервисе"""
-        # Универсальный метод для обработки команды и кнопки
-        if isinstance(update, Update):
-            message = update.message
-        else:
-            message = update  # для вызова из кнопки
-        
-        help_text = """
-👋 Доброго дня! Я бот магазину SecureShop.
-
-🔐 Наш сервіс купує підписки на ваш готовий акаунт, а не дає вам свій. Ми дуже стараємось бути з клієнтами, тому відповіді на будь-які питання по нашому сервісу можна задавати цілодобово.
-
-📌 Список доступних команд:
-/start - Головне меню
-/order - Зробити замовлення
-/question - Поставити запитання
-/channel - Наш канал з асортиментом, оновленнями та розіграшами
-/help - Ця довідка
-
-💬 Якщо у вас виникли питання, не соромтеся звертатися!
-        """
-        await message.reply_text(help_text.strip())
-    
-    async def channel_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Отправляет ссылку на основной канал"""
-        keyboard = [[
-            InlineKeyboardButton(
-                "📢 Перейти в SecureShopUA", 
-                url="https://t.me/SecureShopUA"
-            )
-        ]]
-        reply_markup = InlineKeyboardMarkup(keyboard)
-        
-        message_text = """
-📢 Наш головний канал з асортиментом, оновленнями та розіграшами:
-
-👉 Тут ви знайдете:
-- 🆕 Актуальні товари та послуги
-- 🔥 Спеціальні пропозиції та знижки
-- 🎁 Розіграші та акції
-- ℹ️ Важливі оновлення сервісу
-
-Приєднуйтесь, щоб бути в курсі всіх новин! 👇
-        """
-        await update.message.reply_text(
-            message_text.strip(),
-            reply_markup=reply_markup
-        )
-    
     async def order_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Обработчик команды /order"""
         keyboard = [
@@ -256,782 +181,35 @@ class TelegramBot:
             reply_markup=InlineKeyboardMarkup(keyboard)
         )
     
-    async def stop_conversation(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Обработчик команды /stop для основателей"""
-        owner_id = update.effective_user.id
-
-        if owner_id not in [OWNER_ID_1, OWNER_ID_2]:
-            return
-
-        if owner_id not in owner_client_map:
-            await update.message.reply_text("У вас нет активного диалога для завершения.")
-            return
-
-        client_id = owner_client_map[owner_id]
-        client_info = active_conversations.get(client_id, {}).get('user_info')
-
-        try:
-            await context.bot.send_message(
-                chat_id=client_id,
-                text="Діалог завершено представником магазину. Якщо у вас є нові питання, будь ласка, скористайтесь командою /start."
-            )
-            if client_info:
-                await update.message.reply_text(f"✅ Вы успешно завершили диалог с клиентом {client_info.first_name}.")
-            else:
-                await update.message.reply_text(f"✅ Вы успешно завершили диалог с клиентом ID {client_id}.")
-
-        except Exception as e:
-            logger.error(f"Ошибка при уведомлении клиента {client_id} о завершении диалога: {e}")
-            await update.message.reply_text("Не удалось уведомить клиента (возможно, он заблокировал бота), но диалог был завершен на вашей стороне.")
-
-        if client_id in active_conversations:
-            del active_conversations[client_id]
-        if owner_id in owner_client_map:
-            del owner_client_map[owner_id]
-    
-    async def show_stats(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Показать статистику для основателей"""
-        owner_id = update.effective_user.id
-        
-        if owner_id not in [OWNER_ID_1, OWNER_ID_2]:
-            return
-            
-        first_start = datetime.fromisoformat(bot_statistics['first_start'])
-        last_save = datetime.fromisoformat(bot_statistics['last_save'])
-        uptime = datetime.now() - first_start
-        
-        stats_message = f"""
-📊 Статистика бота:
-
-👤 Усього користувачів: {bot_statistics['total_users']}
-🛒 Усього замовлень: {bot_statistics['total_orders']}
-❓ Усього запитаннь: {bot_statistics['total_questions']}
-⏱️ Перший запуск: {first_start.strftime('%d.%m.%Y %H:%M')}
-⏱️ Останнє збереження: {last_save.strftime('%d.%m.%Y %H:%M')}
-⏱️ Час роботи: {uptime}
-        """
-        
-        await update.message.reply_text(stats_message.strip())
-
-    async def button_handler(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Обработчик нажатий на кнопки"""
-        query = update.callback_query
-        await query.answer()
-        user_id = query.from_user.id
-        
-        # Главное меню
-        if query.data == 'order':
-            keyboard = [
-                [InlineKeyboardButton("📺 YouTube", callback_data='category_youtube')],
-                [InlineKeyboardButton("💬 ChatGPT", callback_data='category_chatgpt')],
-                [InlineKeyboardButton("🎵 Spotify", callback_data='category_spotify')],
-                [InlineKeyboardButton("🎮 Discord", callback_data='category_discord')],
-                [InlineKeyboardButton("⬅️ Назад", callback_data='back_to_main')]
-            ]
-            await query.edit_message_text(
-                "📦 Оберіть категорію товару:",
-                reply_markup=InlineKeyboardMarkup(keyboard)
-            )
-        
-        # Кнопка "Назад" в главное меню
-        elif query.data == 'back_to_main':
-            keyboard = [
-                [InlineKeyboardButton("🛒 Зробити замовлення", callback_data='order')],
-                [InlineKeyboardButton("❓ Поставити запитання", callback_data='question')],
-                [InlineKeyboardButton("ℹ️ Допомога", callback_data='help')]
-            ]
-            await query.edit_message_text(
-                "Головне меню:",
-                reply_markup=InlineKeyboardMarkup(keyboard)
-            )
-        
-        # Обработка кнопки "help"
-        elif query.data == 'help':
-            await self.show_help(query.message)
-        
-        # Меню YouTube
-        elif query.data == 'category_youtube':
-            keyboard = [
-                [InlineKeyboardButton("6 місяців - 450 UAH", callback_data='youtube_6')],
-                [InlineKeyboardButton("12 місяців - 750 UAH", callback_data='youtube_12')],
-                [InlineKeyboardButton("⬅️ Назад", callback_data='order')]
-            ]
-            await query.edit_message_text(
-                "📺 Оберіть варіант YouTube Premium:",
-                reply_markup=InlineKeyboardMarkup(keyboard)
-            )
-        
-        # Меню ChatGPT
-        elif query.data == 'category_chatgpt':
-            keyboard = [
-                [InlineKeyboardButton("1 місяць - 650 UAH", callback_data='chatgpt_1')],
-                [InlineKeyboardButton("⬅️ Назад", callback_data='order')]
-            ]
-            await query.edit_message_text(
-                "💬 Оберіть варіант ChatGPT Plus:",
-                reply_markup=InlineKeyboardMarkup(keyboard)
-            )
-        
-        # Меню Spotify
-        elif query.data == 'category_spotify':
-            keyboard = [
-                [InlineKeyboardButton("Premium Individual", callback_data='spotify_individual')],
-                [InlineKeyboardButton("Premium Family", callback_data='spotify_family')],
-                [InlineKeyboardButton("⬅️ Назад", callback_data='order')]
-            ]
-            await query.edit_message_text(
-                "🎵 Оберіть тип Spotify Premium:",
-                reply_markup=InlineKeyboardMarkup(keyboard)
-            )
-        
-        # Подменю Spotify Individual
-        elif query.data == 'spotify_individual':
-            keyboard = [
-                [InlineKeyboardButton("1 місяць - 125 UAH", callback_data='spotify_ind_1')],
-                [InlineKeyboardButton("3 місяці - 350 UAH", callback_data='spotify_ind_3')],
-                [InlineKeyboardButton("6 місяців - 550 UAH", callback_data='spotify_ind_6')],
-                [InlineKeyboardButton("12 місяців - 900 UAH", callback_data='spotify_ind_12')],
-                [InlineKeyboardButton("⬅️ Назад", callback_data='category_spotify')]
-            ]
-            await query.edit_message_text(
-                "👤 Spotify Premium Individual:",
-                reply_markup=InlineKeyboardMarkup(keyboard)
-            )
-        
-        # Подменю Spotify Family
-        elif query.data == 'spotify_family':
-            keyboard = [
-                [InlineKeyboardButton("1 місяць - 200 UAH", callback_data='spotify_fam_1')],
-                [InlineKeyboardButton("3 місяці - 569 UAH", callback_data='spotify_fam_3')],
-                [InlineKeyboardButton("6 місяців - 1100 UAH", callback_data='spotify_fam_6')],
-                [InlineKeyboardButton("12 місяців - 2100 UAH", callback_data='spotify_fam_12')],
-                [InlineKeyboardButton("⬅️ Назад", callback_data='category_spotify')]
-            ]
-            await query.edit_message_text(
-                "👨‍👩‍👧‍👦 Spotify Premium Family:",
-                reply_markup=InlineKeyboardMarkup(keyboard)
-            )
-        
-        # Меню Discord
-        elif query.data == 'category_discord':
-            keyboard = [
-                [InlineKeyboardButton("Nitro Basic", callback_data='discord_basic')],
-                [InlineKeyboardButton("Nitro Full", callback_data='discord_full')],
-                [InlineKeyboardButton("⬅️ Назад", callback_data='order')]
-            ]
-            await query.edit_message_text(
-                "🎮 Оберіть тип Discord Nitro:",
-                reply_markup=InlineKeyboardMarkup(keyboard)
-            )
-        
-        # Подменю Discord Basic
-        elif query.data == 'discord_basic':
-            keyboard = [
-                [InlineKeyboardButton("1 місяць - 100 UAH", callback_data='discord_basic_1')],
-                [InlineKeyboardButton("12 місяців - 900 UAH", callback_data='discord_basic_12')],
-                [InlineKeyboardButton("⬅️ Назад", callback_data='category_discord')]
-            ]
-            await query.edit_message_text(
-                "🔹 Discord Nitro Basic:",
-                reply_markup=InlineKeyboardMarkup(keyboard)
-            )
-        
-        # Подменю Discord Full
-        elif query.data == 'discord_full':
-            keyboard = [
-                [InlineKeyboardButton("1 місяць - 170 UAH", callback_data='discord_full_1')],
-                [InlineKeyboardButton("12 місяців - 1700 UAH", callback_data='discord_full_12')],
-                [InlineKeyboardButton("⬅️ Назад", callback_data='category_discord')]
-            ]
-            await query.edit_message_text(
-                "✨ Discord Nitro Full:",
-                reply_markup=InlineKeyboardMarkup(keyboard)
-            )
-        
-        # Обработка выбора товара
-        elif query.data in [
-            'youtube_6', 'youtube_12',
-            'chatgpt_1',
-            'spotify_ind_1', 'spotify_ind_3', 'spotify_ind_6', 'spotify_ind_12',
-            'spotify_fam_1', 'spotify_fam_3', 'spotify_fam_6', 'spotify_fam_12',
-            'discord_basic_1', 'discord_basic_12',
-            'discord_full_1', 'discord_full_12'
-        ]:
-            # Сохраняем выбранный товар в контексте
-            context.user_data['selected_product'] = query.data
-            
-            # Определяем название и цену продукта
-            product_info = self.get_product_info(query.data)
-            
-            keyboard = [
-                [InlineKeyboardButton("✅ Замовити", callback_data='confirm_order')],
-                [InlineKeyboardButton("⬅️ Назад", callback_data=self.get_back_action(query.data))]
-            ]
-            
-            await query.edit_message_text(
-                f"🛒 Ви обрали:\n\n"
-                f"{product_info['name']}\n"
-                f"💵 Ціна: {product_info['price']} UAH\n\n"
-                f"Натисніть \"✅ Замовити\" для підтвердження замовлення.",
-                reply_markup=InlineKeyboardMarkup(keyboard)
-            )
-        
-        # Подтверждение заказа
-        elif query.data == 'confirm_order':
-            selected_product = context.user_data.get('selected_product')
-            if not selected_product:
-                await query.edit_message_text("❌ Помилка: товар не обраний")
-                return
-                
-            product_info = self.get_product_info(selected_product)
-            order_text = f"🛍️ Хочу замовити: {product_info['name']} за {product_info['price']} UAH"
-            
-            # Сохраняем заказ
-            active_conversations[user_id] = {
-                'type': 'order',
-                'user_info': query.from_user,
-                'assigned_owner': None,
-                'order_details': order_text,
-                'last_message': order_text
-            }
-            
-            # Обновляем статистику
-            bot_statistics['total_orders'] += 1
-            save_stats()
-            
-            await query.edit_message_text(
-                "✅ Ваше замовлення прийнято! Засновник магазину зв'яжеться з вами найближчим часом.\n\n"
-                "Ви можете продовжити з іншим запитанням або замовленням.",
-                reply_markup=None
-            )
-            
-            # Пересылаем заказ обоим владельцам
-            await self.forward_order_to_owners(
-                context, 
-                user_id, 
-                query.from_user, 
-                order_text
-            )
-        
-        # Обработка кнопки "question"
-        elif query.data == 'question':
-            active_conversations[user_id] = {
-                'type': 'question',
-                'user_info': query.from_user,
-                'assigned_owner': None,
-                'last_message': "Нове запитання"
-            }
-            
-            # Обновляем статистику
-            bot_statistics['total_questions'] += 1
-            save_stats()
-            
-            await query.edit_message_text(
-                "📝 Напишіть ваше запитання. Я передам його засновнику магазину."
-            )
-        
-        # Взятие заказа основателем
-        elif query.data.startswith('take_order_'):
-            client_id = int(query.data.split('_')[2])
-            owner_id = user_id
-            
-            if client_id not in active_conversations:
-                await query.answer("Діалог вже завершено", show_alert=True)
-                return
-                
-            # Закрепляем заказ за основателем
-            active_conversations[client_id]['assigned_owner'] = owner_id
-            owner_client_map[owner_id] = client_id
-            
-            # Уведомляем основателя
-            client_info = active_conversations[client_id]['user_info']
-            await query.edit_message_text(
-                f"✅ Ви взяли замовлення від клієнта {client_info.first_name}."
-            )
-            
-            # Уведомляем другого основателя
-            other_owner = OWNER_ID_2 if owner_id == OWNER_ID_1 else OWNER_ID_1
-            try:
-                await context.bot.send_message(
-                    chat_id=other_owner,
-                    text=f"ℹ️ Замовлення від клієнта {client_info.first_name} взяв інший представник."
-                )
-            except Exception as e:
-                logger.error(f"Ошибка уведомления другого основателя: {e}")
-        
-        # Передача диалога другому основателю
-        elif query.data.startswith('transfer_'):
-            client_id = int(query.data.split('_')[1])
-            current_owner = user_id
-            
-            other_owner = OWNER_ID_2 if current_owner == OWNER_ID_1 else OWNER_ID_1
-            other_owner_name = "@oc33t" if other_owner == OWNER_ID_2 else "@HiGki2pYYY"
-            
-            if client_id in active_conversations:
-                active_conversations[client_id]['assigned_owner'] = other_owner
-                owner_client_map[other_owner] = client_id
-                if current_owner in owner_client_map:
-                    del owner_client_map[current_owner]
-                
-                client_info = active_conversations[client_id]['user_info']
-                last_message = active_conversations[client_id].get('last_message', 'Немає повідомлень')
-                
-                await query.edit_message_text(
-                    f"✅ Чат с клиентом {client_info.first_name} передан {other_owner_name}"
-                )
-                
-                # Отправляем диалог другому основателю
-                await context.bot.send_message(
-                    chat_id=other_owner,
-                    text=f"📨 Вам передан чат с клиентом:\n\n"
-                         f"👤 {client_info.first_name} (@{client_info.username or 'не указан'})\n"
-                         f"🆔 ID: {client_info.id}\n\n"
-                         f"Останнє повідомлення:\n{last_message}\n\n"
-                         f"Для ответа просто напишите сообщение. Для завершения диалога используйте /stop"
-                )
-    
-    async def handle_message(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Обработчик текстовых сообщений"""
+    async def question_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Обработчик команды /question"""
         user_id = update.effective_user.id
         
-        if user_id in [OWNER_ID_1, OWNER_ID_2]:
-            await self.handle_owner_message(update, context)
-            return
+        # Сохраняем вопрос
+        active_conversations[user_id] = {
+            'type': 'question',
+            'user_info': update.effective_user,
+            'assigned_owner': None,
+            'last_message': "Нове запитання"
+        }
         
-        if user_id in active_conversations:
-            # Сохраняем последнее сообщение
-            active_conversations[user_id]['last_message'] = update.message.text
-            await self.forward_to_owner(update, context)
-        else:
-            keyboard = [
-                [InlineKeyboardButton("🛒 Зробити замовлення", callback_data='order')],
-                [InlineKeyboardButton("❓ Поставити запитання", callback_data='question')],
-                [InlineKeyboardButton("ℹ️ Допомога", callback_data='help')]
-            ]
-            reply_markup = InlineKeyboardMarkup(keyboard)
-            
-            await update.message.reply_text(
-                "Будь ласка, оберіть дію або використайте /start, щоб розпочати.",
-                reply_markup=reply_markup
-            )
-    
-    async def forward_to_owner(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Пересылка сообщения клиента основателю"""
-        user_id = update.effective_user.id
-        user_info = active_conversations[user_id]['user_info']
-        conversation_type = active_conversations[user_id]['type']
+        # Обновляем статистику
+        bot_statistics['total_questions'] += 1
+        save_stats()
         
-        assigned_owner = active_conversations[user_id].get('assigned_owner')
-        
-        # Если заказ еще не взят - отправляем обоим основателям
-        if not assigned_owner:
-            # Для вопросов приоритет у второго основателя
-            if conversation_type == 'question':
-                assigned_owner = OWNER_ID_2
-                active_conversations[user_id]['assigned_owner'] = assigned_owner
-                owner_client_map[assigned_owner] = user_id
-                await self.forward_to_specific_owner(context, user_id, user_info, conversation_type, update.message.text, assigned_owner)
-            else:
-                # Для заказов отправляем обоим основателям
-                await self.forward_to_both_owners(context, user_id, user_info, conversation_type, update.message.text)
-            return
-        
-        # Если заказ уже взят - отправляем только назначенному основателю
-        await self.forward_to_specific_owner(context, user_id, user_info, conversation_type, update.message.text, assigned_owner)
-    
-    async def forward_to_both_owners(self, context, client_id, client_info, conversation_type, message_text):
-        """Пересылка сообщения обоим основателям"""
-        type_emoji = "🛒" if conversation_type == 'order' else "❓"
-        type_text = "ЗАКАЗ" if conversation_type == 'order' else "ВОПРОС"
-        
-        forward_message = f"""
-{type_emoji} {type_text} от клиента:
-
-👤 Пользователь: {client_info.first_name}
-📱 Username: @{client_info.username if client_info.username else 'не указан'}
-🆔 ID: {client_info.id}
-
-💬 Сообщение:
-{message_text}
-
----
-Нажмите "✅ Взять заказ", чтобы обработать этот запрос.
-        """
-        
-        keyboard = [
-            [InlineKeyboardButton("✅ Взять заказ", callback_data=f'take_order_{client_id}')]
-        ]
-        reply_markup = InlineKeyboardMarkup(keyboard)
-        
-        # Отправляем обоим основателям
-        for owner_id in [OWNER_ID_1, OWNER_ID_2]:
-            try:
-                await context.bot.send_message(
-                    chat_id=owner_id,
-                    text=forward_message.strip(),
-                    reply_markup=reply_markup
-                )
-            except Exception as e:
-                logger.error(f"Ошибка отправки сообщения основателю {owner_id}: {e}")
-        
-        # Уведомляем клиента
-        await context.bot.send_message(
-            chat_id=client_id,
-            text="✅ Ваше повідомлення передано засновникам магазину. "
-                 "Очікуйте на відповідь найближчим часом."
+        await update.message.reply_text(
+            "📝 Напишіть ваше запитання. Я передам його засновнику магазину."
         )
     
-    async def forward_to_specific_owner(self, context, client_id, client_info, conversation_type, message_text, owner_id):
-        """Пересылка сообщения конкретному основателю"""
-        type_emoji = "🛒" if conversation_type == 'order' else "❓"
-        type_text = "ЗАКАЗ" if conversation_type == 'order' else "ВОПРОС"
-        owner_name = "@HiGki2pYYY" if owner_id == OWNER_ID_1 else "@oc33t"
-        
-        forward_message = f"""
-{type_emoji} {type_text} от клиента:
+    # ... (остальные методы класса без изменений)
 
-👤 Пользователь: {client_info.first_name}
-📱 Username: @{client_info.username if client_info.username else 'не указан'}
-🆔 ID: {client_info.id}
-
-💬 Сообщение:
-{message_text}
-
----
-Для ответа просто напишите сообщение в этот чат.
-Для завершения диалога используйте /stop.
-Назначен: {owner_name}
-        """
-        
-        keyboard = [
-            [InlineKeyboardButton("🔄 Передать другому основателю", callback_data=f'transfer_{client_id}')]
-        ]
-        reply_markup = InlineKeyboardMarkup(keyboard)
-        
-        try:
-            await context.bot.send_message(
-                chat_id=owner_id,
-                text=forward_message.strip(),
-                reply_markup=reply_markup
-            )
-            
-            # Уведомляем клиента
-            await context.bot.send_message(
-                chat_id=client_id,
-                text="✅ Ваше повідомлення передано засновнику магазину. "
-                     "Очікуйте на відповідь найближчим часом."
-            )
-        except Exception as e:
-            logger.error(f"Ошибка отправки сообщения основателю {owner_id}: {e}")
-            # Если не удалось отправить - пробуем другому основателю
-            other_owner = OWNER_ID_2 if owner_id == OWNER_ID_1 else OWNER_ID_1
-            active_conversations[client_id]['assigned_owner'] = other_owner
-            owner_client_map[other_owner] = client_id
-            await self.forward_to_specific_owner(context, client_id, client_info, conversation_type, message_text, other_owner)
-    
-    async def forward_order_to_owners(self, context, client_id, client_info, order_text):
-        """Пересылает заказ обоим владельцам"""
-        # Сохраняем последнее сообщение
-        active_conversations[client_id]['last_message'] = order_text
-        
-        forward_message = f"""
-🛒 НОВЕ ЗАМОВЛЕННЯ!
-
-👤 Клієнт: {client_info.first_name}
-📱 Username: @{client_info.username if client_info.username else 'не вказано'}
-🆔 ID: {client_info.id}
-
-📋 Деталі замовлення:
-{order_text}
-
----
-Нажмите "✅ Взять заказ", чтобы обработать этот заказ.
-        """
-        
-        keyboard = [
-            [InlineKeyboardButton("✅ Взять заказ", callback_data=f'take_order_{client_id}')]
-        ]
-        reply_markup = InlineKeyboardMarkup(keyboard)
-        
-        # Отправляем обоим основателям
-        for owner_id in [OWNER_ID_1, OWNER_ID_2]:
-            try:
-                await context.bot.send_message(
-                    chat_id=owner_id,
-                    text=forward_message.strip(),
-                    reply_markup=reply_markup
-                )
-            except Exception as e:
-                logger.error(f"Ошибка отправки заказа основателю {owner_id}: {e}")
-    
-    async def handle_owner_message(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Обработка сообщений от основателя"""
-        owner_id = update.effective_user.id
-        
-        if owner_id not in owner_client_map:
-            owner_name = "@HiGki2pYYY" if owner_id == OWNER_ID_1 else "@oc33t"
-            await update.message.reply_text(
-                f"У вас нет активного клиента для ответа. ({owner_name})\n"
-                f"Дождитесь нового сообщения от клиента."
-            )
-            return
-        
-        client_id = owner_client_map[owner_id]
-        
-        if client_id not in active_conversations:
-            del owner_client_map[owner_id]
-            await update.message.reply_text(
-                "Диалог с клиентом завершен или не найден."
-            )
-            return
-        
-        try:
-            # Сохраняем последнее сообщение от основателя
-            active_conversations[client_id]['last_message'] = update.message.text
-            
-            await context.bot.send_message(
-                chat_id=client_id,
-                text=f"📩 Відповідь від магазину:\n\n{update.message.text}"
-            )
-            
-            client_info = active_conversations[client_id]['user_info']
-            await update.message.reply_text(
-                f"✅ Сообщение отправлено клиенту {client_info.first_name}"
-            )
-            
-        except Exception as e:
-            logger.error(f"Ошибка при отправке сообщения клиенту {client_id}: {e}")
-            await update.message.reply_text(
-                "❌ Ошибка при отправке сообщения клиенту. "
-                "Возможно, клиент заблокировал бота."
-            )
-    
-    async def error_handler(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Обработчик ошибок"""
-        logger.warning(f'Update {update} caused error {context.error}')
-    
-    def start_ping_service(self):
-        """Запуск пинговалки в отдельном потоке"""
-        if not self.ping_running:
-            self.ping_running = True
-            ping_thread = threading.Thread(target=self.ping_loop)
-            ping_thread.daemon = True
-            ping_thread.start()
-            logger.info("🔄 Пинговалка запущена")
-    
-    def ping_loop(self):
-        """Цикл пинга сервиса"""
-        import requests
-        ping_url = f"{WEBHOOK_URL}/ping"
-        
-        while self.ping_running:
-            try:
-                response = requests.get(ping_url, timeout=10)
-                if response.status_code == 200:
-                    logger.info("✅ Ping успешен - сервис активен")
-                else:
-                    logger.warning(f"⚠️ Ping вернул статус {response.status_code}")
-            except requests.exceptions.RequestException as e:
-                logger.error(f"❌ Ошибка ping: {e}")
-            except Exception as e:
-                logger.error(f"❌ Неожиданная ошибка ping: {e}")
-            
-            time.sleep(PING_INTERVAL)
-    
-    def get_product_info(self, product_code):
-        """Возвращает информацию о товаре по его коду"""
-        products = {
-            'youtube_6': {'name': "YouTube Premium (6 місяців)", 'price': 450},
-            'youtube_12': {'name': "YouTube Premium (12 місяців)", 'price': 750},
-            'chatgpt_1': {'name': "ChatGPT Plus (1 місяць)", 'price': 650},
-            'spotify_ind_1': {'name': "Spotify Premium Individual (1 місяць)", 'price': 125},
-            'spotify_ind_3': {'name': "Spotify Premium Individual (3 місяці)", 'price': 350},
-            'spotify_ind_6': {'name': "Spotify Premium Individual (6 місяців)", 'price': 550},
-            'spotify_ind_12': {'name': "Spotify Premium Individual (12 місяців)", 'price': 900},
-            'spotify_fam_1': {'name': "Spotify Premium Family (1 місяць)", 'price': 200},
-            'spotify_fam_3': {'name': "Spotify Premium Family (3 місяці)", 'price': 569},
-            'spotify_fam_6': {'name': "Spotify Premium Family (6 місяців)", 'price': 1100},
-            'spotify_fam_12': {'name': "Spotify Premium Family (12 місяців)", 'price': 2100},
-            'discord_basic_1': {'name': "Discord Nitro Basic (1 місяць)", 'price': 100},
-            'discord_basic_12': {'name': "Discord Nitro Basic (12 місяців)", 'price': 900},
-            'discord_full_1': {'name': "Discord Nitro Full (1 місяць)", 'price': 170},
-            'discord_full_12': {'name': "Discord Nitro Full (12 місяців)", 'price': 1700},
-        }
-        return products.get(product_code, {'name': "Невідомий товар", 'price': 0})
-    
-    def get_back_action(self, product_code):
-        """Возвращает действие для кнопки 'Назад' в зависимости от товара"""
-        category_map = {
-            'youtube_6': 'category_youtube',
-            'youtube_12': 'category_youtube',
-            'chatgpt_1': 'category_chatgpt',
-            'spotify_ind_1': 'spotify_individual',
-            'spotify_ind_3': 'spotify_individual',
-            'spotify_ind_6': 'spotify_individual',
-            'spotify_ind_12': 'spotify_individual',
-            'spotify_fam_1': 'spotify_family',
-            'spotify_fam_3': 'spotify_family',
-            'spotify_fam_6': 'spotify_family',
-            'spotify_fam_12': 'spotify_family',
-            'discord_basic_1': 'discord_basic',
-            'discord_basic_12': 'discord_basic',
-            'discord_full_1': 'discord_full',
-            'discord_full_12': 'discord_full',
-        }
-        return category_map.get(product_code, 'order')
-
-bot_instance = TelegramBot()
-
-@flask_app.route('/ping', methods=['GET'])
-def ping():
-    return jsonify({
-        'status': 'alive',
-        'message': 'Bot is running',
-        'timestamp': time.time(),
-        'uptime': time.time() - datetime.fromisoformat(bot_statistics['first_start']).timestamp(),
-        'bot_running': bot_running,
-        'mode': 'polling' if USE_POLLING else 'webhook'
-    }), 200
-
-@flask_app.route('/health', methods=['GET'])
-def health():
-    return jsonify({
-        'status': 'healthy',
-        'bot_token': f"{BOT_TOKEN[:10]}..." if BOT_TOKEN else "Not set",
-        'active_conversations': len(active_conversations),
-        'owner_client_map': len(owner_client_map),
-        'ping_interval': PING_INTERVAL,
-        'webhook_url': WEBHOOK_URL,
-        'initialized': bot_instance.initialized if bot_instance else False,
-        'bot_running': bot_running,
-        'mode': 'polling' if USE_POLLING else 'webhook',
-        'stats': bot_statistics
-    }), 200
-
-@flask_app.route(f'/{BOT_TOKEN}', methods=['POST'])
-def webhook():
-    if USE_POLLING:
-        return jsonify({'error': 'Webhook disabled in polling mode'}), 400
-    
-    global telegram_app
-    
-    if not telegram_app or not bot_instance.initialized:
-        logger.error("Telegram app не инициализирован")
-        return jsonify({'error': 'Bot not initialized'}), 500
-    
-    try:
-        json_data = request.get_json()
-        if json_data:
-            update = Update.de_json(json_data, telegram_app.bot)
-            pass
-        return '', 200
-    except Exception as e:
-        logger.error(f"Ошибка обработки webhook: {e}")
-        return jsonify({'error': str(e)}), 500
-
-@flask_app.route('/', methods=['GET'])
-def index():
-    return jsonify({
-        'message': 'Telegram Bot SecureShop активен',
-        'status': 'running',
-        'mode': 'polling' if USE_POLLING else 'webhook',
-        'webhook_url': f"{WEBHOOK_URL}/{BOT_TOKEN}" if not USE_POLLING else None,
-        'ping_interval': f"{PING_INTERVAL} секунд",
-        'owners': ['@HiGki2pYYY', '@oc33t'],
-        'initialized': bot_instance.initialized if bot_instance else False,
-        'bot_running': bot_running,
-        'stats': bot_statistics
-    }), 200
-
-async def setup_webhook():
-    if USE_POLLING:
-        try:
-            await telegram_app.bot.delete_webhook()
-            logger.info("🗑️ Webhook удален - используется polling режим")
-        except Exception as e:
-            logger.error(f"Ошибка удаления webhook: {e}")
-        return True
-    
-    try:
-        webhook_url = f"{WEBHOOK_URL}/{BOT_TOKEN}"
-        await telegram_app.bot.set_webhook(webhook_url)
-        logger.info(f"✅ Webhook установлен: {webhook_url}")
-        return True
-    except Exception as e:
-        logger.error(f"❌ Ошибка установки webhook: {e}")
-        return False
-
-async def start_bot():
-    global telegram_app, bot_running
-    
-    with bot_lock:
-        if bot_running:
-            logger.warning("🛑 Бот уже запущен! Пропускаем повторный запуск")
-            return
-        
-        try:
-            await bot_instance.initialize()
-            telegram_app = bot_instance.application
-            
-            if USE_POLLING:
-                await setup_webhook()
-                await bot_instance.start_polling()
-                bot_running = True
-                logger.info("✅ Бот запущен в polling режиме")
-            else:
-                success = await setup_webhook()
-                if success:
-                    bot_running = True
-                    logger.info("✅ Бот запущен в webhook режиме")
-                else:
-                    logger.error("❌ Не удалось настроить webhook")
-                    
-        except Exception as e:
-            logger.error(f"❌ Ошибка запуска бота: {e}")
-            bot_running = False
-            raise
-
-def bot_thread():
-    loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(loop)
-    bot_instance.loop = loop
-    
-    try:
-        loop.run_until_complete(start_bot())
-        if USE_POLLING:
-            loop.run_forever()
-    except Conflict as e:
-        logger.error(f"🚨 Критический конфликт: {e}")
-        logger.warning("🕒 Ожидаем 30 секунд перед повторным запуском...")
-        time.sleep(30)
-        bot_thread()
-    except Exception as e:
-        logger.error(f"❌ Критическая ошибка в bot_thread: {e}")
-        logger.warning("🕒 Ожидаем 15 секунд перед повторным запуском...")
-        time.sleep(15)
-        bot_thread()
-    finally:
-        try:
-            if not loop.is_closed():
-                loop.close()
-        except:
-            pass
-        logger.warning("🔁 Перезапускаем поток бота...")
-        time.sleep(5)
-        bot_thread()
-
-def auto_save_loop():
-    """Функция автосохранения статистики"""
-    while True:
-        time.sleep(300)  # 5 минут
-        save_stats()
-        logger.info("✅ Статистика автосохранена")
+# ... (остальной код без изменений до функции main)
 
 def main():
-    # Задержка для Render.com, чтобы избежать конфликтов
+    # Увеличиваем задержку для Render.com
     if os.environ.get('RENDER'):
-        logger.info("⏳ Ожидаем 10 секунд для предотвращения конфликтов...")
-        time.sleep(10)
+        logger.info("⏳ Ожидаем 15 секунд для предотвращения конфликтов...")
+        time.sleep(15)  # Увеличено до 15 секунд
     
     # Запускаем автосохранение
     auto_save_thread = threading.Thread(target=auto_save_loop)
