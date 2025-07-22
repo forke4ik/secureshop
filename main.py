@@ -5,7 +5,7 @@ import threading
 import time
 import json
 from datetime import datetime
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, User, BotCommandScopeChat
 from telegram.ext import Application, CommandHandler, MessageHandler, CallbackQueryHandler, filters, ContextTypes
 from telegram.error import Conflict
 from flask import Flask, request, jsonify
@@ -617,40 +617,69 @@ class TelegramBot:
             await update.message.reply_text("ℹ️ В базе данных нет пользователей для экспорта.")
 
     async def show_active_chats(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Показывает активные чаты для основателей с кнопкой продолжить"""
-    # ... (остальной код без изменений)
-    
-    for chat in active_chats:
-        # Получаем актуальную информацию о пользователе из словаря
-        client_info = active_conversations[chat['user_id']]['user_info']
+        """Показывает активные чаты для основателей с кнопкой продолжить"""
+        owner_id = update.effective_user.id
         
-        # Добавим информацию о назначенном владельце
-        owner_info = "Не назначен"
-        if chat['assigned_owner']:
-            if chat['assigned_owner'] == OWNER_ID_1:
-                owner_info = "@HiGki2pYYY"
-            elif chat['assigned_owner'] == OWNER_ID_2:
-                owner_info = "@oc33t"
-            else:
-                owner_info = f"ID: {chat['assigned_owner']}"
-        
-        message += (
-            f"👤 {client_info.first_name} (@{client_info.username if client_info.username else 'нет'})\n"
-            f"   Тип: {chat['conversation_type']}\n"
-            f"   Назначен: {owner_info}\n"
-            f"   Последнее сообщение: {chat['last_message'][:50]}{'...' if len(chat['last_message']) > 50 else ''}\n"
-            f"   [ID: {chat['user_id']}]\n\n"
-        )
-        
-        # Добавляем кнопку "Продолжить" для каждого чата
-        keyboard.append([
-            InlineKeyboardButton(
-                f"Продолжить диалог с {client_info.first_name}",
-                callback_data=f'continue_chat_{chat["user_id"]}'
-            )
-        ])
-        
-    # ... (остальной код без изменений)
+        if owner_id not in [OWNER_ID_1, OWNER_ID_2]:
+            return
+            
+        try:
+            with psycopg.connect(DATABASE_URL) as conn:
+                with conn.cursor(row_factory=dict_row) as cur:
+                    cur.execute("""
+                        SELECT ac.*, u.first_name, u.username 
+                        FROM active_conversations ac
+                        JOIN users u ON ac.user_id = u.id
+                        ORDER BY ac.updated_at DESC
+                    """)
+                    active_chats = cur.fetchall()
+                    
+            if not active_chats:
+                await update.message.reply_text("ℹ️ Нет активных чатов.")
+                return
+                
+            message = "🔄 Активные чаты:\n\n"
+            keyboard = []
+            for chat in active_chats:
+                # Получаем актуальную информацию о пользователе из словаря
+                if chat['user_id'] in active_conversations:
+                    client_info = active_conversations[chat['user_id']]['user_info']
+                else:
+                    # Если почему-то нет в active_conversations, используем данные из БД
+                    client_info = {
+                        'first_name': chat['first_name'] or 'Неизвестный',
+                        'username': chat['username'] or 'N/A'
+                    }
+                
+                # Добавим информацию о назначенном владельце
+                owner_info = "Не назначен"
+                if chat['assigned_owner']:
+                    if chat['assigned_owner'] == OWNER_ID_1:
+                        owner_info = "@HiGki2pYYY"
+                    elif chat['assigned_owner'] == OWNER_ID_2:
+                        owner_info = "@oc33t"
+                    else:
+                        owner_info = f"ID: {chat['assigned_owner']}"
+                
+                # Форматируем имя пользователя
+                username = f"@{client_info.username}" if hasattr(client_info, 'username') and client_info.username else "нет"
+                first_name = client_info.first_name if hasattr(client_info, 'first_name') else chat['first_name']
+                
+                message += (
+                    f"👤 {first_name} ({username})\n"
+                    f"   Тип: {chat['conversation_type']}\n"
+                    f"   Назначен: {owner_info}\n"
+                    f"   Последнее сообщение: {chat['last_message'][:50]}{'...' if len(chat['last_message']) > 50 else ''}\n"
+                    f"   [ID: {chat['user_id']}]\n\n"
+                )
+                
+                # Добавляем кнопку "Продолжить" для каждого чата
+                keyboard.append([
+                    InlineKeyboardButton(
+                        f"Продолжить диалог с {first_name}",
+                        callback_data=f'continue_chat_{chat["user_id"]}'
+                    )
+                ])
                 
             reply_markup = InlineKeyboardMarkup(keyboard)
             await update.message.reply_text(
@@ -716,93 +745,93 @@ class TelegramBot:
             logger.error(f"❌ Ошибка получения истории сообщений: {e}")
             await update.message.reply_text("❌ Произошла ошибка при получении истории.")
 
-  async def start_dialog_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Команда для начала диалога с пользователем по ID"""
-    owner_id = update.effective_user.id
-    if owner_id not in [OWNER_ID_1, OWNER_ID_2]:
-        return
+    async def start_dialog_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Команда для начала диалога с пользователем по ID"""
+        owner_id = update.effective_user.id
+        if owner_id not in [OWNER_ID_1, OWNER_ID_2]:
+            return
 
-    if not context.args:
-        await update.message.reply_text("ℹ️ Использование: /dialog <user_id>")
-        return
+        if not context.args:
+            await update.message.reply_text("ℹ️ Использование: /dialog <user_id>")
+            return
 
-    try:
-        client_id = int(context.args[0])
-    except ValueError:
-        await update.message.reply_text("❌ Неверный формат ID. ID должно быть числом.")
-        return
+        try:
+            client_id = int(context.args[0])
+        except ValueError:
+            await update.message.reply_text("❌ Неверный формат ID. ID должно быть числом.")
+            return
 
-    # Проверяем, есть ли пользователь в БД
-    try:
-        with psycopg.connect(DATABASE_URL) as conn:
-            with conn.cursor(row_factory=dict_row) as cur:
-                cur.execute("SELECT * FROM users WHERE id = %s", (client_id,))
-                client_info = cur.fetchone()
-    except Exception as e:
-        logger.error(f"Ошибка получения пользователя: {e}")
-        await update.message.reply_text("❌ Ошибка получения информации о пользователе.")
-        return
+        # Проверяем, есть ли пользователь в БД
+        try:
+            with psycopg.connect(DATABASE_URL) as conn:
+                with conn.cursor(row_factory=dict_row) as cur:
+                    cur.execute("SELECT * FROM users WHERE id = %s", (client_id,))
+                    client_info = cur.fetchone()
+        except Exception as e:
+            logger.error(f"Ошибка получения пользователя: {e}")
+            await update.message.reply_text("❌ Ошибка получения информации о пользователе.")
+            return
 
-    if not client_info:
-        await update.message.reply_text("❌ Пользователь не найден в базе данных.")
-        return
+        if not client_info:
+            await update.message.reply_text("❌ Пользователь не найден в базе данных.")
+            return
 
-    # Создаем объект пользователя Telegram
-    client_user = User(
-        id=client_info['id'],
-        first_name=client_info['first_name'],
-        last_name=client_info.get('last_name', ''),
-        username=client_info.get('username', ''),
-        language_code=client_info.get('language_code', ''),
-        is_bot=False
-    )
-
-    # Создаем активный диалог (если его нет)
-    if client_id not in active_conversations:
-        active_conversations[client_id] = {
-            'type': 'manual',
-            'user_info': client_user,  # Используем объект пользователя
-            'assigned_owner': owner_id,
-            'last_message': "Диалог начат основателем"
-        }
-        save_active_conversation(client_id, 'manual', owner_id, "Диалог начат основателем")
-    else:
-        # Если диалог уже есть, назначаем текущего основателя
-        active_conversations[client_id]['assigned_owner'] = owner_id
-        save_active_conversation(
-            client_id, 
-            active_conversations[client_id]['type'], 
-            owner_id, 
-            active_conversations[client_id]['last_message']
+        # Создаем объект пользователя Telegram
+        client_user = User(
+            id=client_info['id'],
+            first_name=client_info['first_name'],
+            last_name=client_info.get('last_name', ''),
+            username=client_info.get('username', ''),
+            language_code=client_info.get('language_code', ''),
+            is_bot=False
         )
 
-    # Запоминаем связь основателя и клиента
-    owner_client_map[owner_id] = client_id
+        # Создаем активный диалог (если его нет)
+        if client_id not in active_conversations:
+            active_conversations[client_id] = {
+                'type': 'manual',
+                'user_info': client_user,  # Используем объект пользователя
+                'assigned_owner': owner_id,
+                'last_message': "Диалог начат основателем"
+            }
+            save_active_conversation(client_id, 'manual', owner_id, "Диалог начат основателем")
+        else:
+            # Если диалог уже есть, назначаем текущего основателя
+            active_conversations[client_id]['assigned_owner'] = owner_id
+            save_active_conversation(
+                client_id, 
+                active_conversations[client_id]['type'], 
+                owner_id, 
+                active_conversations[client_id]['last_message']
+            )
 
-    # Получаем историю переписки
-    history = get_conversation_history(client_id)
+        # Запоминаем связь основателя и клиента
+        owner_client_map[owner_id] = client_id
 
-    # Формируем сообщение с историей
-    history_text = "📨 История переписки:\n\n"
-    for msg in reversed(history):  # в хронологическом порядке
-        sender = "👤 Клиент" if msg['is_from_user'] else "👨‍💼 Магазин"
-        history_text += f"{sender} [{msg['created_at'].strftime('%d.%m.%Y %H:%M')}]:\n{msg['message']}\n\n"
+        # Получаем историю переписки
+        history = get_conversation_history(client_id)
 
-    # Отправляем историю основателю
-    try:
-        await update.message.reply_text(history_text[:4096])
-        # Если история длинная, отправляем остальные части
-        if len(history_text) > 4096:
-            parts = [history_text[i:i+4096] for i in range(4096, len(history_text), 4096)]
-            for part in parts:
-                await update.message.reply_text(part)
-    except Exception as e:
-        logger.error(f"Ошибка отправки истории: {e}")
+        # Формируем сообщение с историей
+        history_text = "📨 История переписки:\n\n"
+        for msg in reversed(history):  # в хронологическом порядке
+            sender = "👤 Клиент" if msg['is_from_user'] else "👨‍💼 Магазин"
+            history_text += f"{sender} [{msg['created_at'].strftime('%d.%m.%Y %H:%M')}]:\n{msg['message']}\n\n"
 
-    await update.message.reply_text(
-        "💬 Теперь вы можете писать сообщения, и они будут отправлены этому пользователю.\n"
-        "Для завершения диалога используйте /stop."
-    )
+        # Отправляем историю основателю
+        try:
+            await update.message.reply_text(history_text[:4096])
+            # Если история длинная, отправляем остальные части
+            if len(history_text) > 4096:
+                parts = [history_text[i:i+4096] for i in range(4096, len(history_text), 4096)]
+                for part in parts:
+                    await update.message.reply_text(part)
+        except Exception as e:
+            logger.error(f"Ошибка отправки истории: {e}")
+
+        await update.message.reply_text(
+            "💬 Теперь вы можете писать сообщения, и они будут отправлены этому пользователю.\n"
+            "Для завершения диалога используйте /stop."
+        )
 
     async def button_handler(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Обработчик нажатий на кнопки"""
