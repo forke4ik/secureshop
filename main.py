@@ -765,11 +765,17 @@ class TelegramBot:
         # Создаем активный диалог (если его нет)
         if client_id not in active_conversations:
             active_conversations[client_id] = {
-                'type': 'manual',
-                'user_info': client_info,
-                'assigned_owner': owner_id,
-                'last_message': "Диалог начат основателем"
-            }
+    'type': 'manual',
+    'user_info': User(  # Создаем объект пользователя Telegram
+        id=client_info['id'],
+        first_name=client_info['first_name'],
+        last_name=client_info['last_name'],
+        username=client_info['username'],
+        language_code=client_info['language_code'],
+        is_bot=False
+    ),
+    ...
+}
             save_active_conversation(client_id, 'manual', owner_id, "Диалог начат основателем")
         else:
             # Если диалог уже есть, назначаем текущего основателя
