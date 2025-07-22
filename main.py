@@ -9,6 +9,10 @@ from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, MessageHandler, CallbackQueryHandler, filters, ContextTypes
 from telegram.error import Conflict
 from flask import Flask, request, jsonify
+import psycopg2
+from psycopg2 import sql
+from psycopg2.extras import DictCursor
+import io
 
 # Настройка логирования
 logging.basicConfig(
@@ -25,9 +29,191 @@ PORT = int(os.getenv('PORT', 8443))
 WEBHOOK_URL = os.getenv('WEBHOOK_URL', 'https://secureshop-3obw.onrender.com')
 PING_INTERVAL = int(os.getenv('PING_INTERVAL', 840))  # 14 минут
 USE_POLLING = os.getenv('USE_POLLING', 'true').lower() == 'true'
+DATABASE_URL = os.getenv('DATABASE_URL', 'postgresql://neondb_owner:npg_bVBre5mOwfi8@ep-crimson-block-a2j2rggi-pooler.eu-central-1.aws.neon.tech/neondb?sslmode=require&channel_binding=require')
 
 # Путь к файлу с данными
 STATS_FILE = "bot_stats.json"
+
+# Функции для работы с базой данных
+def init_db():
+    """Инициализация базы данных"""
+    conn = None
+    try:
+        conn = psycopg2.connect(DATABASE_URL)
+        with conn.cursor() as cur:
+            # Таблица пользователей
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS users (
+                    id BIGINT PRIMARY KEY,
+                    username VARCHAR(255),
+                    first_name VARCHAR(255),
+                    last_name VARCHAR(255),
+                    language_code VARCHAR(10),
+                    is_bot BOOLEAN,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                );
+            """)
+            
+            # Таблица сообщений
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS messages (
+                    id SERIAL PRIMARY KEY,
+                    user_id BIGINT REFERENCES users(id),
+                    message TEXT,
+                    is_from_user BOOLEAN,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                );
+            """)
+            
+            # Таблица активных диалогов
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS active_conversations (
+                    user_id BIGINT PRIMARY KEY REFERENCES users(id),
+                    conversation_type VARCHAR(50),
+                    assigned_owner BIGINT,
+                    last_message TEXT,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                );
+            """)
+            conn.commit()
+        logger.info("✅ База данных инициализирована")
+    except Exception as e:
+        logger.error(f"❌ Ошибка инициализации базы данных: {e}")
+    finally:
+        if conn:
+            conn.close()
+
+def save_user(user):
+    """Сохраняет/обновляет пользователя в базе данных"""
+    conn = None
+    try:
+        conn = psycopg2.connect(DATABASE_URL)
+        with conn.cursor() as cur:
+            cur.execute("""
+                INSERT INTO users (id, username, first_name, last_name, language_code, is_bot)
+                VALUES (%s, %s, %s, %s, %s, %s)
+                ON CONFLICT (id) DO UPDATE
+                SET username = EXCLUDED.username,
+                    first_name = EXCLUDED.first_name,
+                    last_name = EXCLUDED.last_name,
+                    language_code = EXCLUDED.language_code,
+                    is_bot = EXCLUDED.is_bot,
+                    updated_at = CURRENT_TIMESTAMP;
+            """, (user.id, user.username, user.first_name, user.last_name, user.language_code, user.is_bot))
+            conn.commit()
+    except Exception as e:
+        logger.error(f"❌ Ошибка сохранения пользователя: {e}")
+    finally:
+        if conn:
+            conn.close()
+
+def save_message(user_id, message_text, is_from_user):
+    """Сохраняет сообщение в базе данных"""
+    conn = None
+    try:
+        conn = psycopg2.connect(DATABASE_URL)
+        with conn.cursor() as cur:
+            cur.execute("""
+                INSERT INTO messages (user_id, message, is_from_user)
+                VALUES (%s, %s, %s)
+            """, (user_id, message_text, is_from_user))
+            conn.commit()
+    except Exception as e:
+        logger.error(f"❌ Ошибка сохранения сообщения: {e}")
+    finally:
+        if conn:
+            conn.close()
+
+def save_active_conversation(user_id, conversation_type, assigned_owner, last_message):
+    """Сохраняет активный диалог в базе данных"""
+    conn = None
+    try:
+        conn = psycopg2.connect(DATABASE_URL)
+        with conn.cursor() as cur:
+            cur.execute("""
+                INSERT INTO active_conversations (user_id, conversation_type, assigned_owner, last_message)
+                VALUES (%s, %s, %s, %s)
+                ON CONFLICT (user_id) DO UPDATE
+                SET conversation_type = EXCLUDED.conversation_type,
+                    assigned_owner = EXCLUDED.assigned_owner,
+                    last_message = EXCLUDED.last_message,
+                    updated_at = CURRENT_TIMESTAMP;
+            """, (user_id, conversation_type, assigned_owner, last_message))
+            conn.commit()
+    except Exception as e:
+        logger.error(f"❌ Ошибка сохранения активного диалога: {e}")
+    finally:
+        if conn:
+            conn.close()
+
+def delete_active_conversation(user_id):
+    """Удаляет активный диалог из базы данных"""
+    conn = None
+    try:
+        conn = psycopg2.connect(DATABASE_URL)
+        with conn.cursor() as cur:
+            cur.execute("DELETE FROM active_conversations WHERE user_id = %s", (user_id,))
+            conn.commit()
+    except Exception as e:
+        logger.error(f"❌ Ошибка удаления активного диалога: {e}")
+    finally:
+        if conn:
+            conn.close()
+
+def get_conversation_history(user_id, limit=50):
+    """Возвращает историю сообщений для пользователя"""
+    conn = None
+    try:
+        conn = psycopg2.connect(DATABASE_URL)
+        with conn.cursor(cursor_factory=DictCursor) as cur:
+            cur.execute("""
+                SELECT * FROM messages
+                WHERE user_id = %s
+                ORDER BY created_at DESC
+                LIMIT %s
+            """, (user_id, limit))
+            return cur.fetchall()
+    except Exception as e:
+        logger.error(f"❌ Ошибка получения истории сообщений: {e}")
+        return []
+    finally:
+        if conn:
+            conn.close()
+
+def get_all_users():
+    """Возвращает всех пользователей из базы данных"""
+    conn = None
+    try:
+        conn = psycopg2.connect(DATABASE_URL)
+        with conn.cursor(cursor_factory=DictCursor) as cur:
+            cur.execute("SELECT * FROM users ORDER BY created_at DESC")
+            return cur.fetchall()
+    except Exception as e:
+        logger.error(f"❌ Ошибка получения пользователей: {e}")
+        return []
+    finally:
+        if conn:
+            conn.close()
+
+def get_total_users_count():
+    """Возвращает общее количество пользователей"""
+    conn = None
+    try:
+        conn = psycopg2.connect(DATABASE_URL)
+        with conn.cursor() as cur:
+            cur.execute("SELECT COUNT(*) FROM users")
+            return cur.fetchone()[0]
+    except Exception as e:
+        logger.error(f"❌ Ошибка получения количества пользователей: {e}")
+        return 0
+    finally:
+        if conn:
+            conn.close()
+
+# Инициализируем базу данных при старте
+init_db()
 
 # Функции для работы с данными
 def load_stats():
@@ -101,6 +287,8 @@ class TelegramBot:
         self.application.add_handler(CommandHandler("channel", self.channel_command))
         self.application.add_handler(CommandHandler("order", self.order_command))
         self.application.add_handler(CommandHandler("question", self.question_command))
+        self.application.add_handler(CommandHandler("chats", self.show_active_chats))
+        self.application.add_handler(CommandHandler("history", self.show_conversation_history))
         self.application.add_handler(CallbackQueryHandler(self.button_handler))
         self.application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, self.handle_message))
         self.application.add_error_handler(self.error_handler)
@@ -160,6 +348,9 @@ class TelegramBot:
     async def start(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Обработчик команды /start"""
         user = update.effective_user
+        
+        # Сохраняем пользователя в базе
+        save_user(user)
         
         # Обновляем статистику
         if user.id not in bot_statistics['active_users']:
@@ -279,6 +470,9 @@ class TelegramBot:
             'last_message': "Нове запитання"
         }
         
+        # Сохраняем в БД
+        save_active_conversation(user_id, 'question', None, "Нове запитання")
+        
         # Обновляем статистику
         bot_statistics['total_questions'] += 1
         save_stats()
@@ -316,6 +510,9 @@ class TelegramBot:
                 del active_conversations[client_id]
             if user_id in owner_client_map:
                 del owner_client_map[user_id]
+            
+            # Удаляем из базы данных
+            delete_active_conversation(client_id)
             return
 
         # Для обычных пользователей: завершение своего диалога
@@ -339,6 +536,9 @@ class TelegramBot:
                 "✅ Ваш діалог завершено.\n\n"
                 "Ви можете розпочати новий діалог за допомогою /start."
             )
+            
+            # Удаляем из базы данных
+            delete_active_conversation(user_id)
             return
 
         # Если нет активного диалога
@@ -354,6 +554,9 @@ class TelegramBot:
         if owner_id not in [OWNER_ID_1, OWNER_ID_2]:
             return
             
+        # Получаем общее количество пользователей из базы
+        total_users_db = get_total_users_count()
+        
         first_start = datetime.fromisoformat(bot_statistics['first_start'])
         last_save = datetime.fromisoformat(bot_statistics['last_save'])
         uptime = datetime.now() - first_start
@@ -361,7 +564,8 @@ class TelegramBot:
         stats_message = f"""
 📊 Статистика бота:
 
-👤 Усього користувачів: {bot_statistics['total_users']}
+👤 Усього користувачів (файл): {bot_statistics['total_users']}
+👤 Усього користувачів (БД): {total_users_db}
 🛒 Усього замовлень: {bot_statistics['total_orders']}
 ❓ Усього запитаннь: {bot_statistics['total_questions']}
 ⏱️ Перший запуск: {first_start.strftime('%d.%m.%Y %H:%M')}
@@ -370,6 +574,132 @@ class TelegramBot:
         """
         
         await update.message.reply_text(stats_message.strip())
+        
+        # Добавляем экспорт пользователей в JSON
+        all_users = get_all_users()
+        if all_users:
+            # Преобразуем в JSON
+            users_data = []
+            for user in all_users:
+                users_data.append({
+                    'id': user['id'],
+                    'username': user['username'],
+                    'first_name': user['first_name'],
+                    'last_name': user['last_name'],
+                    'language_code': user['language_code'],
+                    'is_bot': user['is_bot'],
+                    'created_at': user['created_at'].isoformat() if user['created_at'] else None,
+                    'updated_at': user['updated_at'].isoformat() if user['updated_at'] else None
+                })
+            
+            json_data = json.dumps(users_data, ensure_ascii=False, indent=2).encode('utf-8')
+            file = io.BytesIO(json_data)
+            file.seek(0)
+            file.name = 'users_export.json'
+            
+            await update.message.reply_document(
+                document=file,
+                caption="📊 Экспорт всех пользователей в JSON"
+            )
+        else:
+            await update.message.reply_text("ℹ️ В базе данных нет пользователей для экспорта.")
+
+    async def show_active_chats(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Показывает активные чаты для основателей"""
+        owner_id = update.effective_user.id
+        
+        if owner_id not in [OWNER_ID_1, OWNER_ID_2]:
+            return
+            
+        try:
+            conn = psycopg2.connect(DATABASE_URL)
+            with conn.cursor(cursor_factory=DictCursor) as cur:
+                cur.execute("""
+                    SELECT ac.*, u.first_name, u.username 
+                    FROM active_conversations ac
+                    JOIN users u ON ac.user_id = u.id
+                    ORDER BY ac.updated_at DESC
+                """)
+                active_chats = cur.fetchall()
+                
+            if not active_chats:
+                await update.message.reply_text("ℹ️ Нет активных чатов.")
+                return
+                
+            message = "🔄 Активные чаты:\n\n"
+            for i, chat in enumerate(active_chats, 1):
+                message += (
+                    f"{i}. {chat['first_name']} (@{chat['username']})\n"
+                    f"   Тип: {chat['conversation_type']}\n"
+                    f"   Последнее сообщение: {chat['last_message'][:50]}{'...' if len(chat['last_message']) > 50 else ''}\n"
+                    f"   [ID: {chat['user_id']}]\n\n"
+                )
+                
+            await update.message.reply_text(message.strip())
+            
+        except Exception as e:
+            logger.error(f"❌ Ошибка получения активных чатов: {e}")
+            await update.message.reply_text("❌ Произошла ошибка при получении активных чатов.")
+        finally:
+            if conn:
+                conn.close()
+
+    async def show_conversation_history(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Показывает историю переписки с пользователем"""
+        owner_id = update.effective_user.id
+        
+        if owner_id not in [OWNER_ID_1, OWNER_ID_2]:
+            return
+            
+        # Проверяем, есть ли аргумент команды (user_id)
+        if not context.args:
+            await update.message.reply_text("ℹ️ Использование: /history <user_id>")
+            return
+            
+        try:
+            user_id = int(context.args[0])
+            history = get_conversation_history(user_id)
+            
+            if not history:
+                await update.message.reply_text(f"ℹ️ Нет истории сообщений для пользователя {user_id}.")
+                return
+                
+            # Получаем информацию о пользователе
+            conn = psycopg2.connect(DATABASE_URL)
+            with conn.cursor(cursor_factory=DictCursor) as cur:
+                cur.execute("SELECT * FROM users WHERE id = %s", (user_id,))
+                user_info = cur.fetchone()
+                
+            if not user_info:
+                user_info = {'first_name': 'Неизвестный', 'username': 'N/A'}
+            
+            message = (
+                f"📨 История переписки с пользователем:\n\n"
+                f"👤 {user_info['first_name']} (@{user_info.get('username', 'N/A')})\n"
+                f"🆔 ID: {user_id}\n\n"
+            )
+            
+            for msg in reversed(history):  # В хронологическом порядке
+                sender = "👤 Клиент" if msg['is_from_user'] else "👨‍💼 Магазин"
+                message += f"{sender} [{msg['created_at'].strftime('%d.%m.%Y %H:%M')}]:\n{msg['message']}\n\n"
+            
+            # Разбиваем сообщение на части, если оно слишком длинное
+            max_length = 4096
+            if len(message) > max_length:
+                parts = [message[i:i+max_length] for i in range(0, len(message), max_length)]
+                for part in parts:
+                    await update.message.reply_text(part)
+            else:
+                await update.message.reply_text(message)
+                
+        except ValueError:
+            await update.message.reply_text("❌ Неверный формат ID пользователя.")
+        except Exception as e:
+            logger.error(f"❌ Ошибка получения истории сообщений: {e}")
+            await update.message.reply_text("❌ Произошла ошибка при получении истории.")
+        finally:
+            if 'conn' in locals() and conn:
+                conn.close()
 
     async def button_handler(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Обработчик нажатий на кнопки"""
@@ -553,6 +883,9 @@ class TelegramBot:
                 'last_message': order_text
             }
             
+            # Сохраняем в БД
+            save_active_conversation(user_id, 'order', None, order_text)
+            
             # Обновляем статистику
             bot_statistics['total_orders'] += 1
             save_stats()
@@ -590,6 +923,9 @@ class TelegramBot:
                 'last_message': "Нове запитання"
             }
             
+            # Сохраняем в БД
+            save_active_conversation(user_id, 'question', None, "Нове запитання")
+            
             # Обновляем статистику
             bot_statistics['total_questions'] += 1
             save_stats()
@@ -611,6 +947,14 @@ class TelegramBot:
             # Закрепляем заказ за основателем
             active_conversations[client_id]['assigned_owner'] = owner_id
             owner_client_map[owner_id] = client_id
+            
+            # Сохраняем в БД
+            save_active_conversation(
+                client_id, 
+                active_conversations[client_id]['type'], 
+                owner_id, 
+                active_conversations[client_id]['last_message']
+            )
             
             # Уведомляем основателя
             client_info = active_conversations[client_id]['user_info']
@@ -642,6 +986,14 @@ class TelegramBot:
                 if current_owner in owner_client_map:
                     del owner_client_map[current_owner]
                 
+                # Обновляем в БД
+                save_active_conversation(
+                    client_id, 
+                    active_conversations[client_id]['type'], 
+                    other_owner, 
+                    active_conversations[client_id]['last_message']
+                )
+                
                 client_info = active_conversations[client_id]['user_info']
                 last_message = active_conversations[client_id].get('last_message', 'Немає повідомлень')
                 
@@ -669,7 +1021,20 @@ class TelegramBot:
         
         if user_id in active_conversations:
             # Сохраняем последнее сообщение
-            active_conversations[user_id]['last_message'] = update.message.text
+            message_text = update.message.text
+            active_conversations[user_id]['last_message'] = message_text
+            
+            # Сохраняем сообщение от пользователя
+            save_message(user_id, message_text, True)
+            
+            # Обновляем активный диалог в БД
+            save_active_conversation(
+                user_id, 
+                active_conversations[user_id]['type'], 
+                active_conversations[user_id].get('assigned_owner'), 
+                message_text
+            )
+            
             await self.forward_to_owner(update, context)
         else:
             keyboard = [
@@ -699,6 +1064,15 @@ class TelegramBot:
                 assigned_owner = OWNER_ID_2
                 active_conversations[user_id]['assigned_owner'] = assigned_owner
                 owner_client_map[assigned_owner] = user_id
+                
+                # Обновляем в БД
+                save_active_conversation(
+                    user_id, 
+                    conversation_type, 
+                    assigned_owner, 
+                    active_conversations[user_id]['last_message']
+                )
+                
                 await self.forward_to_specific_owner(context, user_id, user_info, conversation_type, update.message.text, assigned_owner)
             else:
                 # Для заказов отправляем обоим основателям
@@ -719,6 +1093,7 @@ class TelegramBot:
 👤 Пользователь: {client_info.first_name}
 📱 Username: @{client_info.username if client_info.username else 'не указан'}
 🆔 ID: {client_info.id}
+🌐 Язык: {client_info.language_code or 'не указан'}
 
 💬 Сообщение:
 {message_text}
@@ -762,6 +1137,7 @@ class TelegramBot:
 👤 Пользователь: {client_info.first_name}
 📱 Username: @{client_info.username if client_info.username else 'не указан'}
 🆔 ID: {client_info.id}
+🌐 Язык: {client_info.language_code or 'не указан'}
 
 💬 Сообщение:
 {message_text}
@@ -796,6 +1172,15 @@ class TelegramBot:
             other_owner = OWNER_ID_2 if owner_id == OWNER_ID_1 else OWNER_ID_1
             active_conversations[client_id]['assigned_owner'] = other_owner
             owner_client_map[other_owner] = client_id
+            
+            # Обновляем в БД
+            save_active_conversation(
+                client_id, 
+                conversation_type, 
+                other_owner, 
+                message_text
+            )
+            
             await self.forward_to_specific_owner(context, client_id, client_info, conversation_type, message_text, other_owner)
     
     async def forward_order_to_owners(self, context, client_id, client_info, order_text):
@@ -803,12 +1188,16 @@ class TelegramBot:
         # Сохраняем последнее сообщение
         active_conversations[client_id]['last_message'] = order_text
         
+        # Сохраняем в БД
+        save_active_conversation(client_id, 'order', None, order_text)
+        
         forward_message = f"""
 🛒 НОВЕ ЗАМОВЛЕННЯ!
 
 👤 Клієнт: {client_info.first_name}
 📱 Username: @{client_info.username if client_info.username else 'не вказано'}
 🆔 ID: {client_info.id}
+🌐 Язык: {client_info.language_code or 'не указан'}
 
 📋 Деталі замовлення:
 {order_text}
@@ -855,12 +1244,22 @@ class TelegramBot:
             return
         
         try:
-            # Сохраняем последнее сообщение от основателя
-            active_conversations[client_id]['last_message'] = update.message.text
+            # Сохраняем сообщение от основателя
+            message_text = update.message.text
+            save_message(client_id, message_text, False)
+            
+            # Обновляем последнее сообщение
+            active_conversations[client_id]['last_message'] = message_text
+            save_active_conversation(
+                client_id, 
+                active_conversations[client_id]['type'], 
+                owner_id, 
+                message_text
+            )
             
             await context.bot.send_message(
                 chat_id=client_id,
-                text=f"📩 Відповідь від магазину:\n\n{update.message.text}"
+                text=f"📩 Відповідь від магазину:\n\n{message_text}"
             )
             
             client_info = active_conversations[client_id]['user_info']
@@ -1115,6 +1514,7 @@ def main():
     logger.info(f"🔄 РЕЖИМ: {'Polling' if USE_POLLING else 'Webhook'}")
     logger.info(f"👤 Основатель 1: {OWNER_ID_1} (@HiGki2pYYY)")
     logger.info(f"👤 Основатель 2: {OWNER_ID_2} (@oc33t)")
+    logger.info(f"💾 DATABASE_URL: {DATABASE_URL[:30]}...")
     
     bot_thread_instance = threading.Thread(target=bot_thread)
     bot_thread_instance.daemon = True
