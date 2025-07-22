@@ -617,55 +617,40 @@ class TelegramBot:
             await update.message.reply_text("ℹ️ В базе данных нет пользователей для экспорта.")
 
     async def show_active_chats(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Показывает активные чаты для основателей с кнопкой продолжить"""
-        owner_id = update.effective_user.id
+    """Показывает активные чаты для основателей с кнопкой продолжить"""
+    # ... (остальной код без изменений)
+    
+    for chat in active_chats:
+        # Получаем актуальную информацию о пользователе из словаря
+        client_info = active_conversations[chat['user_id']]['user_info']
         
-        if owner_id not in [OWNER_ID_1, OWNER_ID_2]:
-            return
-            
-        try:
-            with psycopg.connect(DATABASE_URL) as conn:
-                with conn.cursor(row_factory=dict_row) as cur:
-                    cur.execute("""
-                        SELECT ac.*, u.first_name, u.username 
-                        FROM active_conversations ac
-                        JOIN users u ON ac.user_id = u.id
-                        ORDER BY ac.updated_at DESC
-                    """)
-                    active_chats = cur.fetchall()
-                    
-            if not active_chats:
-                await update.message.reply_text("ℹ️ Нет активных чатов.")
-                return
-                
-            message = "🔄 Активные чаты:\n\n"
-            keyboard = []
-            for chat in active_chats:
-                # Добавим информацию о назначенном владельце
-                owner_info = "Не назначен"
-                if chat['assigned_owner']:
-                    if chat['assigned_owner'] == OWNER_ID_1:
-                        owner_info = "@HiGki2pYYY"
-                    elif chat['assigned_owner'] == OWNER_ID_2:
-                        owner_info = "@oc33t"
-                    else:
-                        owner_info = f"ID: {chat['assigned_owner']}"
-                
-                message += (
-                    f"👤 {chat['first_name']} (@{chat['username']})\n"
-                    f"   Тип: {chat['conversation_type']}\n"
-                    f"   Назначен: {owner_info}\n"
-                    f"   Последнее сообщение: {chat['last_message'][:50]}{'...' if len(chat['last_message']) > 50 else ''}\n"
-                    f"   [ID: {chat['user_id']}]\n\n"
-                )
-                
-                # Добавляем кнопку "Продолжить" для каждого чата
-                keyboard.append([
-                    InlineKeyboardButton(
-                        f"Продолжить диалог с {chat['first_name']}",
-                        callback_data=f'continue_chat_{chat["user_id"]}'
-                    )
-                ])
+        # Добавим информацию о назначенном владельце
+        owner_info = "Не назначен"
+        if chat['assigned_owner']:
+            if chat['assigned_owner'] == OWNER_ID_1:
+                owner_info = "@HiGki2pYYY"
+            elif chat['assigned_owner'] == OWNER_ID_2:
+                owner_info = "@oc33t"
+            else:
+                owner_info = f"ID: {chat['assigned_owner']}"
+        
+        message += (
+            f"👤 {client_info.first_name} (@{client_info.username if client_info.username else 'нет'})\n"
+            f"   Тип: {chat['conversation_type']}\n"
+            f"   Назначен: {owner_info}\n"
+            f"   Последнее сообщение: {chat['last_message'][:50]}{'...' if len(chat['last_message']) > 50 else ''}\n"
+            f"   [ID: {chat['user_id']}]\n\n"
+        )
+        
+        # Добавляем кнопку "Продолжить" для каждого чата
+        keyboard.append([
+            InlineKeyboardButton(
+                f"Продолжить диалог с {client_info.first_name}",
+                callback_data=f'continue_chat_{chat["user_id"]}'
+            )
+        ])
+        
+    # ... (остальной код без изменений)
                 
             reply_markup = InlineKeyboardMarkup(keyboard)
             await update.message.reply_text(
