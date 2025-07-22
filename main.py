@@ -9,9 +9,8 @@ from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, MessageHandler, CallbackQueryHandler, filters, ContextTypes
 from telegram.error import Conflict
 from flask import Flask, request, jsonify
-import psycopg2
-from psycopg2 import sql
-from psycopg2.extras import DictCursor
+import psycopg
+from psycopg.rows import dict_row
 import io
 
 # Настройка логирования
@@ -37,180 +36,143 @@ STATS_FILE = "bot_stats.json"
 # Функции для работы с базой данных
 def init_db():
     """Инициализация базы данных"""
-    conn = None
     try:
-        conn = psycopg2.connect(DATABASE_URL)
-        with conn.cursor() as cur:
-            # Таблица пользователей
-            cur.execute("""
-                CREATE TABLE IF NOT EXISTS users (
-                    id BIGINT PRIMARY KEY,
-                    username VARCHAR(255),
-                    first_name VARCHAR(255),
-                    last_name VARCHAR(255),
-                    language_code VARCHAR(10),
-                    is_bot BOOLEAN,
-                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-                );
-            """)
-            
-            # Таблица сообщений
-            cur.execute("""
-                CREATE TABLE IF NOT EXISTS messages (
-                    id SERIAL PRIMARY KEY,
-                    user_id BIGINT REFERENCES users(id),
-                    message TEXT,
-                    is_from_user BOOLEAN,
-                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-                );
-            """)
-            
-            # Таблица активных диалогов
-            cur.execute("""
-                CREATE TABLE IF NOT EXISTS active_conversations (
-                    user_id BIGINT PRIMARY KEY REFERENCES users(id),
-                    conversation_type VARCHAR(50),
-                    assigned_owner BIGINT,
-                    last_message TEXT,
-                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-                );
-            """)
-            conn.commit()
+        with psycopg.connect(DATABASE_URL) as conn:
+            with conn.cursor() as cur:
+                # Таблица пользователей
+                cur.execute("""
+                    CREATE TABLE IF NOT EXISTS users (
+                        id BIGINT PRIMARY KEY,
+                        username VARCHAR(255),
+                        first_name VARCHAR(255),
+                        last_name VARCHAR(255),
+                        language_code VARCHAR(10),
+                        is_bot BOOLEAN,
+                        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                    );
+                """)
+                
+                # Таблица сообщений
+                cur.execute("""
+                    CREATE TABLE IF NOT EXISTS messages (
+                        id SERIAL PRIMARY KEY,
+                        user_id BIGINT REFERENCES users(id),
+                        message TEXT,
+                        is_from_user BOOLEAN,
+                        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                    );
+                """)
+                
+                # Таблица активных диалогов
+                cur.execute("""
+                    CREATE TABLE IF NOT EXISTS active_conversations (
+                        user_id BIGINT PRIMARY KEY REFERENCES users(id),
+                        conversation_type VARCHAR(50),
+                        assigned_owner BIGINT,
+                        last_message TEXT,
+                        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                    );
+                """)
         logger.info("✅ База данных инициализирована")
     except Exception as e:
         logger.error(f"❌ Ошибка инициализации базы данных: {e}")
-    finally:
-        if conn:
-            conn.close()
 
 def save_user(user):
     """Сохраняет/обновляет пользователя в базе данных"""
-    conn = None
     try:
-        conn = psycopg2.connect(DATABASE_URL)
-        with conn.cursor() as cur:
-            cur.execute("""
-                INSERT INTO users (id, username, first_name, last_name, language_code, is_bot)
-                VALUES (%s, %s, %s, %s, %s, %s)
-                ON CONFLICT (id) DO UPDATE
-                SET username = EXCLUDED.username,
-                    first_name = EXCLUDED.first_name,
-                    last_name = EXCLUDED.last_name,
-                    language_code = EXCLUDED.language_code,
-                    is_bot = EXCLUDED.is_bot,
-                    updated_at = CURRENT_TIMESTAMP;
-            """, (user.id, user.username, user.first_name, user.last_name, user.language_code, user.is_bot))
-            conn.commit()
+        with psycopg.connect(DATABASE_URL) as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    INSERT INTO users (id, username, first_name, last_name, language_code, is_bot)
+                    VALUES (%s, %s, %s, %s, %s, %s)
+                    ON CONFLICT (id) DO UPDATE
+                    SET username = EXCLUDED.username,
+                        first_name = EXCLUDED.first_name,
+                        last_name = EXCLUDED.last_name,
+                        language_code = EXCLUDED.language_code,
+                        is_bot = EXCLUDED.is_bot,
+                        updated_at = CURRENT_TIMESTAMP;
+                """, (user.id, user.username, user.first_name, user.last_name, user.language_code, user.is_bot))
     except Exception as e:
         logger.error(f"❌ Ошибка сохранения пользователя: {e}")
-    finally:
-        if conn:
-            conn.close()
 
 def save_message(user_id, message_text, is_from_user):
     """Сохраняет сообщение в базе данных"""
-    conn = None
     try:
-        conn = psycopg2.connect(DATABASE_URL)
-        with conn.cursor() as cur:
-            cur.execute("""
-                INSERT INTO messages (user_id, message, is_from_user)
-                VALUES (%s, %s, %s)
-            """, (user_id, message_text, is_from_user))
-            conn.commit()
+        with psycopg.connect(DATABASE_URL) as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    INSERT INTO messages (user_id, message, is_from_user)
+                    VALUES (%s, %s, %s)
+                """, (user_id, message_text, is_from_user))
     except Exception as e:
         logger.error(f"❌ Ошибка сохранения сообщения: {e}")
-    finally:
-        if conn:
-            conn.close()
 
 def save_active_conversation(user_id, conversation_type, assigned_owner, last_message):
     """Сохраняет активный диалог в базе данных"""
-    conn = None
     try:
-        conn = psycopg2.connect(DATABASE_URL)
-        with conn.cursor() as cur:
-            cur.execute("""
-                INSERT INTO active_conversations (user_id, conversation_type, assigned_owner, last_message)
-                VALUES (%s, %s, %s, %s)
-                ON CONFLICT (user_id) DO UPDATE
-                SET conversation_type = EXCLUDED.conversation_type,
-                    assigned_owner = EXCLUDED.assigned_owner,
-                    last_message = EXCLUDED.last_message,
-                    updated_at = CURRENT_TIMESTAMP;
-            """, (user_id, conversation_type, assigned_owner, last_message))
-            conn.commit()
+        with psycopg.connect(DATABASE_URL) as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    INSERT INTO active_conversations (user_id, conversation_type, assigned_owner, last_message)
+                    VALUES (%s, %s, %s, %s)
+                    ON CONFLICT (user_id) DO UPDATE
+                    SET conversation_type = EXCLUDED.conversation_type,
+                        assigned_owner = EXCLUDED.assigned_owner,
+                        last_message = EXCLUDED.last_message,
+                        updated_at = CURRENT_TIMESTAMP;
+                """, (user_id, conversation_type, assigned_owner, last_message))
     except Exception as e:
         logger.error(f"❌ Ошибка сохранения активного диалога: {e}")
-    finally:
-        if conn:
-            conn.close()
 
 def delete_active_conversation(user_id):
     """Удаляет активный диалог из базы данных"""
-    conn = None
     try:
-        conn = psycopg2.connect(DATABASE_URL)
-        with conn.cursor() as cur:
-            cur.execute("DELETE FROM active_conversations WHERE user_id = %s", (user_id,))
-            conn.commit()
+        with psycopg.connect(DATABASE_URL) as conn:
+            with conn.cursor() as cur:
+                cur.execute("DELETE FROM active_conversations WHERE user_id = %s", (user_id,))
     except Exception as e:
         logger.error(f"❌ Ошибка удаления активного диалога: {e}")
-    finally:
-        if conn:
-            conn.close()
 
 def get_conversation_history(user_id, limit=50):
     """Возвращает историю сообщений для пользователя"""
-    conn = None
     try:
-        conn = psycopg2.connect(DATABASE_URL)
-        with conn.cursor(cursor_factory=DictCursor) as cur:
-            cur.execute("""
-                SELECT * FROM messages
-                WHERE user_id = %s
-                ORDER BY created_at DESC
-                LIMIT %s
-            """, (user_id, limit))
-            return cur.fetchall()
+        with psycopg.connect(DATABASE_URL) as conn:
+            with conn.cursor(row_factory=dict_row) as cur:
+                cur.execute("""
+                    SELECT * FROM messages
+                    WHERE user_id = %s
+                    ORDER BY created_at DESC
+                    LIMIT %s
+                """, (user_id, limit))
+                return cur.fetchall()
     except Exception as e:
         logger.error(f"❌ Ошибка получения истории сообщений: {e}")
         return []
-    finally:
-        if conn:
-            conn.close()
 
 def get_all_users():
     """Возвращает всех пользователей из базы данных"""
-    conn = None
     try:
-        conn = psycopg2.connect(DATABASE_URL)
-        with conn.cursor(cursor_factory=DictCursor) as cur:
-            cur.execute("SELECT * FROM users ORDER BY created_at DESC")
-            return cur.fetchall()
+        with psycopg.connect(DATABASE_URL) as conn:
+            with conn.cursor(row_factory=dict_row) as cur:
+                cur.execute("SELECT * FROM users ORDER BY created_at DESC")
+                return cur.fetchall()
     except Exception as e:
         logger.error(f"❌ Ошибка получения пользователей: {e}")
         return []
-    finally:
-        if conn:
-            conn.close()
 
 def get_total_users_count():
     """Возвращает общее количество пользователей"""
-    conn = None
     try:
-        conn = psycopg2.connect(DATABASE_URL)
-        with conn.cursor() as cur:
-            cur.execute("SELECT COUNT(*) FROM users")
-            return cur.fetchone()[0]
+        with psycopg.connect(DATABASE_URL) as conn:
+            with conn.cursor() as cur:
+                cur.execute("SELECT COUNT(*) FROM users")
+                return cur.fetchone()[0]
     except Exception as e:
         logger.error(f"❌ Ошибка получения количества пользователей: {e}")
         return 0
-    finally:
-        if conn:
-            conn.close()
 
 # Инициализируем базу данных при старте
 init_db()
@@ -612,16 +574,16 @@ class TelegramBot:
             return
             
         try:
-            conn = psycopg2.connect(DATABASE_URL)
-            with conn.cursor(cursor_factory=DictCursor) as cur:
-                cur.execute("""
-                    SELECT ac.*, u.first_name, u.username 
-                    FROM active_conversations ac
-                    JOIN users u ON ac.user_id = u.id
-                    ORDER BY ac.updated_at DESC
-                """)
-                active_chats = cur.fetchall()
-                
+            with psycopg.connect(DATABASE_URL) as conn:
+                with conn.cursor(row_factory=dict_row) as cur:
+                    cur.execute("""
+                        SELECT ac.*, u.first_name, u.username 
+                        FROM active_conversations ac
+                        JOIN users u ON ac.user_id = u.id
+                        ORDER BY ac.updated_at DESC
+                    """)
+                    active_chats = cur.fetchall()
+                    
             if not active_chats:
                 await update.message.reply_text("ℹ️ Нет активных чатов.")
                 return
@@ -640,9 +602,6 @@ class TelegramBot:
         except Exception as e:
             logger.error(f"❌ Ошибка получения активных чатов: {e}")
             await update.message.reply_text("❌ Произошла ошибка при получении активных чатов.")
-        finally:
-            if conn:
-                conn.close()
 
     async def show_conversation_history(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Показывает историю переписки с пользователем"""
@@ -665,11 +624,11 @@ class TelegramBot:
                 return
                 
             # Получаем информацию о пользователе
-            conn = psycopg2.connect(DATABASE_URL)
-            with conn.cursor(cursor_factory=DictCursor) as cur:
-                cur.execute("SELECT * FROM users WHERE id = %s", (user_id,))
-                user_info = cur.fetchone()
-                
+            with psycopg.connect(DATABASE_URL) as conn:
+                with conn.cursor(row_factory=dict_row) as cur:
+                    cur.execute("SELECT * FROM users WHERE id = %s", (user_id,))
+                    user_info = cur.fetchone()
+                    
             if not user_info:
                 user_info = {'first_name': 'Неизвестный', 'username': 'N/A'}
             
@@ -697,9 +656,6 @@ class TelegramBot:
         except Exception as e:
             logger.error(f"❌ Ошибка получения истории сообщений: {e}")
             await update.message.reply_text("❌ Произошла ошибка при получении истории.")
-        finally:
-            if 'conn' in locals() and conn:
-                conn.close()
 
     async def button_handler(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Обработчик нажатий на кнопки"""
