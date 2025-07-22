@@ -79,8 +79,8 @@ def init_db():
     except Exception as e:
         logger.error(f"❌ Ошибка инициализации базы данных: {e}")
 
-def save_user(user):
-    """Сохраняет/обновляет пользователя в базе данных"""
+def ensure_user_exists(user):
+    """Убеждается, что пользователь существует в базе"""
     try:
         with psycopg.connect(DATABASE_URL) as conn:
             with conn.cursor() as cur:
@@ -103,6 +103,18 @@ def save_message(user_id, message_text, is_from_user):
     try:
         with psycopg.connect(DATABASE_URL) as conn:
             with conn.cursor() as cur:
+                # Проверяем существование пользователя
+                cur.execute("SELECT 1 FROM users WHERE id = %s", (user_id,))
+                if not cur.fetchone():
+                    logger.warning(f"⚠️ Пользователь {user_id} не найден при сохранении сообщения")
+                    # Создаем минимальную запись
+                    cur.execute("""
+                        INSERT INTO users (id)
+                        VALUES (%s)
+                        ON CONFLICT (id) DO NOTHING;
+                    """, (user_id,))
+                
+                # Сохраняем сообщение
                 cur.execute("""
                     INSERT INTO messages (user_id, message, is_from_user)
                     VALUES (%s, %s, %s)
@@ -115,6 +127,18 @@ def save_active_conversation(user_id, conversation_type, assigned_owner, last_me
     try:
         with psycopg.connect(DATABASE_URL) as conn:
             with conn.cursor() as cur:
+                # Проверяем существование пользователя
+                cur.execute("SELECT 1 FROM users WHERE id = %s", (user_id,))
+                if not cur.fetchone():
+                    logger.warning(f"⚠️ Пользователь {user_id} не найден при сохранении диалога")
+                    # Создаем минимальную запись
+                    cur.execute("""
+                        INSERT INTO users (id)
+                        VALUES (%s)
+                        ON CONFLICT (id) DO NOTHING;
+                    """, (user_id,))
+                
+                # Сохраняем/обновляем диалог
                 cur.execute("""
                     INSERT INTO active_conversations (user_id, conversation_type, assigned_owner, last_message)
                     VALUES (%s, %s, %s, %s)
@@ -311,8 +335,8 @@ class TelegramBot:
         """Обработчик команды /start"""
         user = update.effective_user
         
-        # Сохраняем пользователя в базе
-        save_user(user)
+        # Гарантируем наличие пользователя в БД
+        ensure_user_exists(user)
         
         # Обновляем статистику
         if user.id not in bot_statistics['active_users']:
@@ -413,7 +437,11 @@ class TelegramBot:
     
     async def question_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Обработчик команды /question"""
-        user_id = update.effective_user.id
+        user = update.effective_user
+        user_id = user.id
+        
+        # Гарантируем наличие пользователя в БД
+        ensure_user_exists(user)
         
         # Проверяем активные диалоги
         if user_id in active_conversations:
@@ -427,7 +455,7 @@ class TelegramBot:
         # Создаем запись о вопросе
         active_conversations[user_id] = {
             'type': 'question',
-            'user_info': update.effective_user,
+            'user_info': user,
             'assigned_owner': None,
             'last_message': "Нове запитання"
         }
@@ -446,8 +474,9 @@ class TelegramBot:
     
     async def stop_conversation(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Обработчик команды /stop для завершения диалогов"""
-        user_id = update.effective_user.id
-        user_name = update.effective_user.first_name
+        user = update.effective_user
+        user_id = user.id
+        user_name = user.first_name
 
         # Для основателей: завершение диалога с клиентом
         if user_id in [OWNER_ID_1, OWNER_ID_2] and user_id in owner_client_map:
@@ -590,9 +619,20 @@ class TelegramBot:
                 
             message = "🔄 Активные чаты:\n\n"
             for i, chat in enumerate(active_chats, 1):
+                # Добавим информацию о назначенном владельце
+                owner_info = "Не назначен"
+                if chat['assigned_owner']:
+                    if chat['assigned_owner'] == OWNER_ID_1:
+                        owner_info = "@HiGki2pYYY"
+                    elif chat['assigned_owner'] == OWNER_ID_2:
+                        owner_info = "@oc33t"
+                    else:
+                        owner_info = f"ID: {chat['assigned_owner']}"
+                
                 message += (
                     f"{i}. {chat['first_name']} (@{chat['username']})\n"
                     f"   Тип: {chat['conversation_type']}\n"
+                    f"   Назначен: {owner_info}\n"
                     f"   Последнее сообщение: {chat['last_message'][:50]}{'...' if len(chat['last_message']) > 50 else ''}\n"
                     f"   [ID: {chat['user_id']}]\n\n"
                 )
@@ -661,7 +701,11 @@ class TelegramBot:
         """Обработчик нажатий на кнопки"""
         query = update.callback_query
         await query.answer()
-        user_id = query.from_user.id
+        user = query.from_user
+        user_id = user.id
+        
+        # Гарантируем наличие пользователя в БД
+        ensure_user_exists(user)
         
         # Главное меню
         if query.data == 'order':
@@ -833,7 +877,7 @@ class TelegramBot:
             # Сохраняем заказ
             active_conversations[user_id] = {
                 'type': 'order',
-                'user_info': query.from_user,
+                'user_info': user,
                 'assigned_owner': None,
                 'order_details': order_text,
                 'last_message': order_text
@@ -856,7 +900,7 @@ class TelegramBot:
             await self.forward_order_to_owners(
                 context, 
                 user_id, 
-                query.from_user, 
+                user, 
                 order_text
             )
         
@@ -874,7 +918,7 @@ class TelegramBot:
             
             active_conversations[user_id] = {
                 'type': 'question',
-                'user_info': query.from_user,
+                'user_info': user,
                 'assigned_owner': None,
                 'last_message': "Нове запитання"
             }
@@ -969,7 +1013,11 @@ class TelegramBot:
     
     async def handle_message(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Обработчик текстовых сообщений"""
-        user_id = update.effective_user.id
+        user = update.effective_user
+        user_id = user.id
+        
+        # Гарантируем наличие пользователя в БД
+        ensure_user_exists(user)
         
         if user_id in [OWNER_ID_1, OWNER_ID_2]:
             await self.handle_owner_message(update, context)
@@ -1180,7 +1228,11 @@ class TelegramBot:
     
     async def handle_owner_message(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Обработка сообщений от основателя"""
-        owner_id = update.effective_user.id
+        owner = update.effective_user
+        owner_id = owner.id
+        
+        # Гарантируем наличие владельца в БД
+        ensure_user_exists(owner)
         
         if owner_id not in owner_client_map:
             owner_name = "@HiGki2pYYY" if owner_id == OWNER_ID_1 else "@oc33t"
