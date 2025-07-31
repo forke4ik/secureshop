@@ -79,8 +79,6 @@ def flush_message_buffer():
     finally:
         message_buffer = []
 
-# ... (предыдущий код остается без изменений до функций буферизации) ...
-
 def flush_active_conv_buffer():
     global active_conv_buffer
     if not active_conv_buffer:
@@ -131,6 +129,96 @@ def flush_active_conv_buffer():
     finally:
         active_conv_buffer = []
 
+def buffer_flush_thread():
+    """Поток для периодического сброса буферов в БД"""
+    while True:
+        time.sleep(BUFFER_FLUSH_INTERVAL)
+        flush_message_buffer()
+        flush_active_conv_buffer()
+
+# Функции для работы с базой данных
+def init_db():
+    """Инициализация базы данных"""
+    try:
+        with psycopg.connect(DATABASE_URL) as conn:
+            with conn.cursor() as cur:
+                # Таблица пользователей
+                cur.execute("""
+                    CREATE TABLE IF NOT EXISTS users (
+                        id BIGINT PRIMARY KEY,
+                        username VARCHAR(255),
+                        first_name VARCHAR(255),
+                        last_name VARCHAR(255),
+                        language_code VARCHAR(10),
+                        is_bot BOOLEAN,
+                        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                    );
+                """)
+                
+                # Таблица сообщений
+                cur.execute("""
+                    CREATE TABLE IF NOT EXISTS messages (
+                        id SERIAL PRIMARY KEY,
+                        user_id BIGINT REFERENCES users(id),
+                        message TEXT,
+                        is_from_user BOOLEAN,
+                        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                    );
+                """)
+                
+                # Таблица активных диалогов
+                cur.execute("""
+                    CREATE TABLE IF NOT EXISTS active_conversations (
+                        user_id BIGINT PRIMARY KEY REFERENCES users(id),
+                        conversation_type VARCHAR(50),
+                        assigned_owner BIGINT,
+                        last_message TEXT,
+                        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                    );
+                """)
+                
+                # Индексы для оптимизации
+                cur.execute("CREATE INDEX IF NOT EXISTS idx_messages_user_id ON messages(user_id);")
+                cur.execute("CREATE INDEX IF NOT EXISTS idx_messages_created_at ON messages(created_at);")
+                
+        logger.info("✅ База данных инициализирована")
+    except Exception as e:
+        logger.error(f"❌ Ошибка инициализации базы данных: {e}")
+
+def ensure_user_exists(user):
+    """Убеждается, что пользователь существует в базе (с кэшированием)"""
+    if user.id in user_cache:
+        return
+        
+    try:
+        with psycopg.connect(DATABASE_URL) as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    INSERT INTO users (id, username, first_name, last_name, language_code, is_bot)
+                    VALUES (%s, %s, %s, %s, %s, %s)
+                    ON CONFLICT (id) DO UPDATE
+                    SET username = EXCLUDED.username,
+                        first_name = EXCLUDED.first_name,
+                        last_name = EXCLUDED.last_name,
+                        language_code = EXCLUDED.language_code,
+                        is_bot = EXCLUDED.is_bot,
+                        updated_at = CURRENT_TIMESTAMP;
+                """, (user.id, user.username, user.first_name, user.last_name, user.language_code, user.is_bot))
+        user_cache.add(user.id)
+    except Exception as e:
+        logger.error(f"❌ Ошибка сохранения пользователя: {e}")
+
+def save_message(user_id, message_text, is_from_user):
+    """Сохраняет сообщение в буфер"""
+    global message_buffer
+    message_buffer.append((user_id, message_text, is_from_user))
+    
+    # Сбрасываем буфер при достижении лимита
+    if len(message_buffer) >= BUFFER_MAX_SIZE:
+        flush_message_buffer()
+
 def save_active_conversation(user_id, conversation_type, assigned_owner, last_message):
     """Сохраняет активный диалог в буфер с обновлением существующих"""
     global active_conv_buffer
@@ -162,84 +250,437 @@ def save_active_conversation(user_id, conversation_type, assigned_owner, last_me
     if len(active_conv_buffer) >= BUFFER_MAX_SIZE:
         flush_active_conv_buffer()
 
-# ... (остальной код остается без изменений) ...
+def delete_active_conversation(user_id):
+    """Удаляет активный диалог из базы данных"""
+    try:
+        with psycopg.connect(DATABASE_URL) as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    DELETE FROM active_conversations 
+                    WHERE user_id = %s
+                    AND (updated_at < NOW() - INTERVAL '1 MINUTE' OR updated_at IS NULL)
+                """, (user_id,))
+    except Exception as e:
+        logger.error(f"❌ Ошибка удаления активного диалога: {e}")
 
-async def stop_conversation(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Обработчик команды /stop для завершения диалогов"""
-    user = update.effective_user
-    user_id = user.id
-    user_name = user.first_name
+def get_conversation_history(user_id, limit=50):
+    """Возвращает историю сообщений для пользователя (с кэшированием)"""
+    # Сначала сбрасываем буфер, чтобы получить актуальные данные
+    flush_message_buffer()
+    
+    # Используем кэш, если есть
+    cache_key = f"{user_id}_{limit}"
+    if cache_key in history_cache:
+        return history_cache[cache_key]
+    
+    try:
+        with psycopg.connect(DATABASE_URL) as conn:
+            with conn.cursor(row_factory=dict_row) as cur:
+                cur.execute("""
+                    SELECT * FROM messages
+                    WHERE user_id = %s
+                    ORDER BY created_at DESC
+                    LIMIT %s
+                """, (user_id, limit))
+                history = cur.fetchall()
+                history_cache[cache_key] = history
+                return history
+    except Exception as e:
+        logger.error(f"❌ Ошибка получения истории сообщений: {e}")
+        return []
 
-    # Для основателей: завершение диалога с клиентом
-    if user_id in [OWNER_ID_1, OWNER_ID_2] and user_id in owner_client_map:
-        client_id = owner_client_map[user_id]
-        client_info = active_conversations.get(client_id, {}).get('user_info')
+def get_all_users():
+    """Возвращает всех пользователей из базы данных"""
+    try:
+        with psycopg.connect(DATABASE_URL) as conn:
+            with conn.cursor(row_factory=dict_row) as cur:
+                cur.execute("SELECT * FROM users ORDER BY created_at DESC")
+                return cur.fetchall()
+    except Exception as e:
+        logger.error(f"❌ Ошибка получения пользователей: {e}")
+        return []
 
+def get_total_users_count():
+    """Возвращает общее количество пользователей"""
+    try:
+        with psycopg.connect(DATABASE_URL) as conn:
+            with conn.cursor() as cur:
+                cur.execute("SELECT COUNT(*) FROM users")
+                return cur.fetchone()[0]
+    except Exception as e:
+        logger.error(f"❌ Ошибка получения количества пользователей: {e}")
+        return 0
+
+# Инициализируем базу данных при старте
+init_db()
+
+# Запускаем поток для сброса буферов
+threading.Thread(target=buffer_flush_thread, daemon=True).start()
+
+# Функции для работы с данными
+def load_stats():
+    if os.path.exists(STATS_FILE):
         try:
-            await context.bot.send_message(
-                chat_id=client_id,
-                text="Діалог завершено представником магазину. Якщо у вас є нові питання, будь ласка, скористайтесь командою /start."
-            )
-            if client_info:
-                await update.message.reply_text(f"✅ Ви успішно завершили діалог з клієнтом {client_info.first_name}.")
-            else:
-                await update.message.reply_text(f"✅ Ви успішно завершили діалог з клієнтом ID {client_id}.")
-
+            with open(STATS_FILE, 'r') as f:
+                return json.load(f)
         except Exception as e:
-            # Добавляем проверку на специфическую ошибку
-            if "Chat_id is empty" in str(e):
-                logger.error(f"Помилка сповіщення клієнта {client_id}: невірний chat_id")
-            else:
-                logger.error(f"Помилка сповіщення клієнта {client_id} про завершення діалогу: {e}")
-            
-            await update.message.reply_text("Не вдалося сповістити клієнта (можливо, він заблокував бота), але діалог було завершено з вашого боку.")
+            logger.error(f"Ошибка загрузки статистики: {e}")
+            return default_stats()
+    return default_stats()
 
-        if client_id in active_conversations:
-            del active_conversations[client_id]
-        if user_id in owner_client_map:
-            del owner_client_map[user_id]
+def default_stats():
+    return {
+        'total_users': 0,
+        'active_users': [],
+        'total_orders': 0,
+        'total_questions': 0,
+        'first_start': datetime.now().isoformat(),
+        'last_save': datetime.now().isoformat()
+    }
+
+def save_stats():
+    try:
+        bot_statistics['last_save'] = datetime.now().isoformat()
+        with open(STATS_FILE, 'w') as f:
+            json.dump(bot_statistics, f, indent=2)
+    except Exception as e:
+        logger.error(f"Ошибка сохранения статистики: {e}")
+
+# Загружаем статистику
+bot_statistics = load_stats()
+
+# Словари для хранения данных
+active_conversations = {}
+owner_client_map = {}
+
+# Глобальные переменные для приложения
+telegram_app = None
+flask_app = Flask(__name__)
+bot_running = False
+bot_lock = threading.Lock()  # Блокировка для управления доступом к боту
+
+class TelegramBot:
+    def __init__(self):
+        self.application = Application.builder().token(BOT_TOKEN).build()
+        self.setup_handlers()
+        self.ping_running = False
+        self.initialized = False
+        self.polling_task = None
+        self.loop = None
+    
+    async def set_commands_menu(self):
+        """Установка стандартного меню команд"""
+        commands = [
+            ("start", "Головне меню"),
+            ("help", "Допомога та інформація"),
+            ("order", "Зробити замовлення"),
+            ("question", "Поставити запитання"),
+            ("channel", "Наш головний канал"),
+            ("stop", "Завершити поточний діалог")
+        ]
         
-        # Удаляем из базы данных
-        delete_active_conversation(client_id)
-        return
+        # Для владельцев добавляем дополнительные команды
+        owner_commands = commands + [
+            ("stats", "Статистика бота"),
+            ("chats", "Активні чати"),
+            ("history", "Історія переписки"),
+            ("dialog", "Почати діалог з користувачем")
+        ]
+        
+        try:
+            # Устанавливаем команды для обычных пользователей
+            await self.application.bot.set_my_commands(commands)
+            
+            # Устанавливаем расширенные команды для владельцев
+            for owner_id in [OWNER_ID_1, OWNER_ID_2]:
+                await self.application.bot.set_my_commands(
+                    owner_commands,
+                    scope=BotCommandScopeChat(owner_id)
+                )
+        except Exception as e:
+            logger.error(f"Ошибка установки команд: {e}")
+    
+    def setup_handlers(self):
+        """Настройка обработчиков команд и сообщений"""
+        self.application.add_handler(CommandHandler("start", self.start))
+        self.application.add_handler(CommandHandler("stop", self.stop_conversation))
+        self.application.add_handler(CommandHandler("stats", self.show_stats))
+        self.application.add_handler(CommandHandler("help", self.show_help))
+        self.application.add_handler(CommandHandler("channel", self.channel_command))
+        self.application.add_handler(CommandHandler("order", self.order_command))
+        self.application.add_handler(CommandHandler("question", self.question_command))
+        self.application.add_handler(CommandHandler("chats", self.show_active_chats))
+        self.application.add_handler(CommandHandler("history", self.show_conversation_history))
+        self.application.add_handler(CommandHandler("dialog", self.start_dialog_command))
+        self.application.add_handler(CallbackQueryHandler(self.button_handler))
+        self.application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, self.handle_message))
+        self.application.add_error_handler(self.error_handler)
+    
+    async def initialize(self):
+        """Асинхронная инициализация приложения"""
+        try:
+            await self.application.initialize()
+            await self.set_commands_menu()
+            self.initialized = True
+            logger.info("✅ Telegram Application инициализирован")
+        except Exception as e:
+            logger.error(f"❌ Ошибка инициализации Telegram Application: {e}")
+            raise
+    
+    async def start_polling(self):
+        """Запуск polling режима"""
+        try:
+            if self.application.updater.running:
+                logger.warning("🛑 Бот уже запущен! Пропускаем повторный запуск")
+                return
+            
+            logger.info("🔄 Запуск polling режима...")
+            await self.application.start()
+            await self.application.updater.start_polling(
+                poll_interval=1.0,
+                timeout=10,
+                bootstrap_retries=-1,
+                read_timeout=10,
+                write_timeout=10,
+                connect_timeout=10,
+                pool_timeout=10
+            )
+            logger.info("✅ Polling запущен")
+        except Conflict as e:
+            logger.error(f"🚨 Конфликт: {e}")
+            logger.warning("🕒 Ожидаем 15 секунд перед повторной попыткой...")
+            await asyncio.sleep(15)
+            await self.start_polling()
+        except Exception as e:
+            logger.error(f"❌ Ошибка запуска polling: {e}")
+            raise
+    
+    async def stop_polling(self):
+        """Остановка polling"""
+        try:
+            if self.application.updater and self.application.updater.running:
+                await self.application.updater.stop()
+            if self.application.running:
+                await self.application.stop()
+            if self.application.post_init:
+                await self.application.shutdown()
+            logger.info("🛑 Polling полностью остановлен")
+        except Exception as e:
+            logger.error(f"❌ Ошибка остановки polling: {e}")
+    
+    async def start(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Обработчик команды /start"""
+        user = update.effective_user
+        
+        # Гарантируем наличие пользователя в БД
+        ensure_user_exists(user)
+        
+        # Обновляем статистику
+        if user.id not in bot_statistics['active_users']:
+            bot_statistics['total_users'] += 1
+            bot_statistics['active_users'].append(user.id)
+            save_stats()
+        
+        if user.id in [OWNER_ID_1, OWNER_ID_2]:
+            owner_name = "@HiGki2pYYY" if user.id == OWNER_ID_1 else "@oc33t"
+            await update.message.reply_text(
+                f"Добро пожаловать, {user.first_name}! ({owner_name})\n"
+                f"Вы вошли как основатель магазина."
+            )
+            return
+        
+        keyboard = [
+            [InlineKeyboardButton("🛒 Зробити замовлення", callback_data='order')],
+            [InlineKeyboardButton("❓ Поставити запитання", callback_data='question')],
+            [InlineKeyboardButton("ℹ️ Допомога", callback_data='help')]
+        ]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        
+        welcome_message = f"""
+Ласкаво просимо, {user.first_name}! 👋
 
-    # Для обычных пользователей: завершение своего диалога
-    if user_id in active_conversations:
-        # Уведомляем основателя, если диалог был назначен и ID валиден
-        if 'assigned_owner' in active_conversations[user_id] and active_conversations[user_id]['assigned_owner'] is not None:
-            owner_id = active_conversations[user_id]['assigned_owner']
+Я бот-помічник нашого магазину. Будь ласка, оберіть, що вас цікавить:
+        """
+        
+        await update.message.reply_text(
+            welcome_message.strip(),
+            reply_markup=reply_markup
+        )
+    
+    async def show_help(self, update: Update, context: ContextTypes.DEFAULT_TYPE = None):
+        """Показывает справку и информацию о сервисе"""
+        # Универсальный метод для обработки команды и кнопки
+        if isinstance(update, Update):
+            message = update.message
+        else:
+            message = update  # для вызова из кнопки
+        
+        help_text = """
+👋 Доброго дня! Я бот магазину SecureShop.
+
+🔐 Наш сервіс купує підписки на ваш готовий акаунт, а не дає вам свій. Ми дуже стараємось бути з клієнтами, тому відповіді на будь-які питання по нашому сервісу можна задавати цілодобово.
+
+📌 Список доступних команд:
+/start - Головне меню
+/order - Зробити замовлення
+/question - Поставити запитання
+/channel - Наш канал з асортиментом, оновленнями та розіграшами
+/stop - Завершити поточний діалог
+/help - Ця довідка
+
+💬 Якщо у вас виникли питання, не соромтеся звертатися!
+        """
+        await message.reply_text(help_text.strip())
+    
+    async def channel_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Отправляет ссылку на основной канал"""
+        keyboard = [[
+            InlineKeyboardButton(
+                "📢 Перейти в SecureShopUA", 
+                url="https://t.me/SecureShopUA"
+            )
+        ]]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        
+        message_text = """
+📢 Наш головний канал з асортиментом, оновленнями та розіграшами:
+
+👉 Тут ви знайдете:
+- 🆕 Актуальні товари та послуги
+- 🔥 Спеціальні пропозиції та знижки
+- 🎁 Розіграші та акції
+- ℹ️ Важливі оновлення сервісу
+
+Приєднуйтесь, щоб бути в курсі всіх новин! 👇
+        """
+        await update.message.reply_text(
+            message_text.strip(),
+            reply_markup=reply_markup
+        )
+    
+    async def order_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Обработчик команды /order"""
+        keyboard = [
+            [InlineKeyboardButton("📺 YouTube", callback_data='category_youtube')],
+            [InlineKeyboardButton("💬 ChatGPT", callback_data='category_chatgpt')],
+            [InlineKeyboardButton("🎵 Spotify", callback_data='category_spotify')],
+            [InlineKeyboardButton("🎮 Discord", callback_data='category_discord')],
+            [InlineKeyboardButton("⬅️ Назад", callback_data='back_to_main')]
+        ]
+        await update.message.reply_text(
+            "📦 Оберіть категорію товару:",
+            reply_markup=InlineKeyboardMarkup(keyboard)
+        )
+    
+    async def question_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Обработчик команды /question"""
+        user = update.effective_user
+        user_id = user.id
+        
+        # Гарантируем наличие пользователя в БД
+        ensure_user_exists(user)
+        
+        # Проверяем активные диалоги
+        if user_id in active_conversations:
+            await update.message.reply_text(
+                "❗ У вас вже є активний діалог.\n\n"
+                "Будь ласка, продовжуйте писати в поточному діалозі або завершіть його командою /stop, "
+                "якщо хочете почати новий діалог."
+            )
+            return
+        
+        # Создаем запись о вопросе
+        active_conversations[user_id] = {
+            'type': 'question',
+            'user_info': user,
+            'assigned_owner': None,
+            'last_message': "Нове запитання"
+        }
+        
+        # Сохраняем в БД
+        save_active_conversation(user_id, 'question', None, "Нове запитання")
+        
+        # Обновляем статистику
+        bot_statistics['total_questions'] += 1
+        save_stats()
+        
+        await update.message.reply_text(
+            "📝 Напишіть ваше запитання. Я передам його засновнику магазину.\n\n"
+            "Щоб завершити цей діалог пізніше, використайте команду /stop."
+        )
+    
+    async def stop_conversation(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Обработчик команды /stop для завершения диалогов"""
+        user = update.effective_user
+        user_id = user.id
+        user_name = user.first_name
+
+        # Для основателей: завершение диалога с клиентом
+        if user_id in [OWNER_ID_1, OWNER_ID_2] and user_id in owner_client_map:
+            client_id = owner_client_map[user_id]
+            client_info = active_conversations.get(client_id, {}).get('user_info')
+
             try:
                 await context.bot.send_message(
-                    chat_id=owner_id,
-                    text=f"ℹ️ Клієнт {user_name} завершив діалог командою /stop."
+                    chat_id=client_id,
+                    text="Діалог завершено представником магазину. Якщо у вас є нові питання, будь ласка, скористайтесь командою /start."
                 )
-                if owner_id in owner_client_map:
-                    del owner_client_map[owner_id]
-            except Exception as e:
-                # Обрабатываем ошибку пустого chat_id
-                if "Chat_id is empty" in str(e):
-                    logger.error(f"Помилка сповіщення власника {owner_id}: невірний chat_id")
+                if client_info:
+                    await update.message.reply_text(f"✅ Ви успішно завершили діалог з клієнтом {client_info.first_name}.")
                 else:
-                    logger.error(f"Помилка сповіщення власника {owner_id}: {e}")
+                    await update.message.reply_text(f"✅ Ви успішно завершили діалог з клієнтом ID {client_id}.")
 
-        # Удаляем диалог
-        del active_conversations[user_id]
+            except Exception as e:
+                if "Chat_id is empty" in str(e):
+                    logger.error(f"Помилка сповіщення клієнта {client_id}: невірний chat_id")
+                else:
+                    logger.error(f"Помилка при сповіщенні клієнта {client_id} про завершення діалогу: {e}")
+                await update.message.reply_text("Не вдалося сповістити клієнта (можливо, він заблокував бота), але діалог було завершено з вашого боку.")
+
+            if client_id in active_conversations:
+                del active_conversations[client_id]
+            if user_id in owner_client_map:
+                del owner_client_map[user_id]
+            
+            # Удаляем из базы данных
+            delete_active_conversation(client_id)
+            return
+
+        # Для обычных пользователей: завершение своего диалога
+        if user_id in active_conversations:
+            # Уведомляем основателя, если диалог был назначен и ID валиден
+            if 'assigned_owner' in active_conversations[user_id] and active_conversations[user_id]['assigned_owner'] is not None:
+                owner_id = active_conversations[user_id]['assigned_owner']
+                try:
+                    await context.bot.send_message(
+                        chat_id=owner_id,
+                        text=f"ℹ️ Клієнт {user_name} завершив діалог командою /stop."
+                    )
+                    if owner_id in owner_client_map:
+                        del owner_client_map[owner_id]
+                except Exception as e:
+                    # Обрабатываем ошибку пустого chat_id
+                    if "Chat_id is empty" in str(e):
+                        logger.error(f"Помилка сповіщення власника {owner_id}: невірний chat_id")
+                    else:
+                        logger.error(f"Помилка сповіщення власника {owner_id}: {e}")
+
+            # Удаляем диалог
+            del active_conversations[user_id]
+            await update.message.reply_text(
+                "✅ Ваш діалог завершено.\n\n"
+                "Ви можете розпочати новий діалог за допомогою /start."
+            )
+            
+            # Удаляем из базы данных
+            delete_active_conversation(user_id)
+            return
+
+        # Если нет активного диалога
         await update.message.reply_text(
-            "✅ Ваш діалог завершено.\n\n"
-            "Ви можете розпочати новий діалог за допомогою /start."
+            "ℹ️ У вас немає активного діалогу для завершення.\n\n"
+            "Щоб розпочати новий діалог, використовуйте /start."
         )
-        
-        # Удаляем из базы данных
-        delete_active_conversation(user_id)
-        return
-
-    # Если нет активного диалога
-    await update.message.reply_text(
-        "ℹ️ У вас немає активного діалогу для завершення.\n\n"
-        "Щоб розпочати новий діалог, використовуйте /start."
-    )
-
-# ... (остальной код без изменений) ...
     
     async def show_stats(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Показать статистику для основателей"""
