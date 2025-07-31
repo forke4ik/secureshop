@@ -28,10 +28,105 @@ PORT = int(os.getenv('PORT', 8443))
 WEBHOOK_URL = os.getenv('WEBHOOK_URL', 'https://secureshop-3obw.onrender.com')
 PING_INTERVAL = int(os.getenv('PING_INTERVAL', 840))  # 14 минут
 USE_POLLING = os.getenv('USE_POLLING', 'true').lower() == 'true'
-DATABASE_URL = os.getenv('DATABASE_URL', 'postgresql://neondb_owner:npg_bVBre5mOwfi8@ep-crimson-block-a2j2rggi-pooler.eu-central-1.aws.neon.tech/neondb?sslmode=require&channel_binding=require')
+DATABASE_URL = os.getenv('DATABASE_URL', 'postgresql://neondb_owner:npg_1E2GxznybVCR@ep-super-pond-a2ce35gl-pooler.eu-central-1.aws.neon.tech/neondb?sslmode=require&channel_binding=require')
 
 # Путь к файлу с данными
 STATS_FILE = "bot_stats.json"
+
+# Оптимизация: буферизация запросов к БД
+BUFFER_FLUSH_INTERVAL = 300  # 5 минут
+BUFFER_MAX_SIZE = 50
+message_buffer = []
+active_conv_buffer = []
+user_cache = set()
+
+# Оптимизация: кэш для истории сообщений
+history_cache = {}
+
+def flush_message_buffer():
+    global message_buffer
+    if not message_buffer:
+        return
+        
+    try:
+        with psycopg.connect(DATABASE_URL) as conn:
+            with conn.cursor() as cur:
+                # Создаем временную таблицу
+                cur.execute("""
+                    CREATE TEMP TABLE temp_messages (
+                        user_id BIGINT,
+                        message TEXT,
+                        is_from_user BOOLEAN
+                    ) ON COMMIT DROP;
+                """)
+                
+                # Заполняем временную таблицу
+                for msg in message_buffer:
+                    cur.execute(
+                        "INSERT INTO temp_messages (user_id, message, is_from_user) VALUES (%s, %s, %s)",
+                        msg
+                    )
+                
+                # Вставляем из временной таблицы
+                cur.execute("""
+                    INSERT INTO messages (user_id, message, is_from_user)
+                    SELECT user_id, message, is_from_user
+                    FROM temp_messages
+                """)
+        logger.info(f"✅ Сброшен буфер сообщений ({len(message_buffer)} записей)")
+    except Exception as e:
+        logger.error(f"❌ Ошибка сброса буфера сообщений: {e}")
+    finally:
+        message_buffer = []
+
+def flush_active_conv_buffer():
+    global active_conv_buffer
+    if not active_conv_buffer:
+        return
+        
+    try:
+        with psycopg.connect(DATABASE_URL) as conn:
+            with conn.cursor() as cur:
+                # Создаем временную таблицу
+                cur.execute("""
+                    CREATE TEMP TABLE temp_active_convs (
+                        user_id BIGINT PRIMARY KEY,
+                        conversation_type VARCHAR(50),
+                        assigned_owner BIGINT,
+                        last_message TEXT
+                    ) ON COMMIT DROP;
+                """)
+                
+                # Заполняем временную таблицу
+                for conv in active_conv_buffer:
+                    cur.execute(
+                        "INSERT INTO temp_active_convs (user_id, conversation_type, assigned_owner, last_message) VALUES (%s, %s, %s, %s)",
+                        conv
+                    )
+                
+                # Обновляем основную таблицу
+                cur.execute("""
+                    INSERT INTO active_conversations (user_id, conversation_type, assigned_owner, last_message)
+                    SELECT user_id, conversation_type, assigned_owner, last_message
+                    FROM temp_active_convs
+                    ON CONFLICT (user_id) DO UPDATE
+                    SET conversation_type = EXCLUDED.conversation_type,
+                        assigned_owner = EXCLUDED.assigned_owner,
+                        last_message = EXCLUDED.last_message,
+                        updated_at = CURRENT_TIMESTAMP;
+                """)
+        logger.info(f"✅ Сброшен буфер диалогов ({len(active_conv_buffer)} записей)")
+    except Exception as e:
+        logger.error(f"❌ Ошибка сброса буфера диалогов: {e}")
+    finally:
+        active_conv_buffer = []
+
+def buffer_flush_thread():
+    """Поток для периодического сброса буферов в БД"""
+    while True:
+        time.sleep(BUFFER_FLUSH_INTERVAL)
+        flush_message_buffer()
+        flush_active_conv_buffer()
 
 # Функции для работы с базой данных
 def init_db():
@@ -75,12 +170,20 @@ def init_db():
                         updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                     );
                 """)
+                
+                # Индексы для оптимизации
+                cur.execute("CREATE INDEX IF NOT EXISTS idx_messages_user_id ON messages(user_id);")
+                cur.execute("CREATE INDEX IF NOT EXISTS idx_messages_created_at ON messages(created_at);")
+                
         logger.info("✅ База данных инициализирована")
     except Exception as e:
         logger.error(f"❌ Ошибка инициализации базы данных: {e}")
 
 def ensure_user_exists(user):
-    """Убеждается, что пользователь существует в базе"""
+    """Убеждается, что пользователь существует в базе (с кэшированием)"""
+    if user.id in user_cache:
+        return
+        
     try:
         with psycopg.connect(DATABASE_URL) as conn:
             with conn.cursor() as cur:
@@ -95,61 +198,27 @@ def ensure_user_exists(user):
                         is_bot = EXCLUDED.is_bot,
                         updated_at = CURRENT_TIMESTAMP;
                 """, (user.id, user.username, user.first_name, user.last_name, user.language_code, user.is_bot))
+        user_cache.add(user.id)
     except Exception as e:
         logger.error(f"❌ Ошибка сохранения пользователя: {e}")
 
 def save_message(user_id, message_text, is_from_user):
-    """Сохраняет сообщение в базе данных"""
-    try:
-        with psycopg.connect(DATABASE_URL) as conn:
-            with conn.cursor() as cur:
-                # Проверяем существование пользователя
-                cur.execute("SELECT 1 FROM users WHERE id = %s", (user_id,))
-                if not cur.fetchone():
-                    logger.warning(f"⚠️ Пользователь {user_id} не найден при сохранении сообщения")
-                    # Создаем минимальную запись
-                    cur.execute("""
-                        INSERT INTO users (id)
-                        VALUES (%s)
-                        ON CONFLICT (id) DO NOTHING;
-                    """, (user_id,))
-                
-                # Сохраняем сообщение
-                cur.execute("""
-                    INSERT INTO messages (user_id, message, is_from_user)
-                    VALUES (%s, %s, %s)
-                """, (user_id, message_text, is_from_user))
-    except Exception as e:
-        logger.error(f"❌ Ошибка сохранения сообщения: {e}")
+    """Сохраняет сообщение в буфер"""
+    global message_buffer
+    message_buffer.append((user_id, message_text, is_from_user))
+    
+    # Сбрасываем буфер при достижении лимита
+    if len(message_buffer) >= BUFFER_MAX_SIZE:
+        flush_message_buffer()
 
 def save_active_conversation(user_id, conversation_type, assigned_owner, last_message):
-    """Сохраняет активный диалог в базе данных"""
-    try:
-        with psycopg.connect(DATABASE_URL) as conn:
-            with conn.cursor() as cur:
-                # Проверяем существование пользователя
-                cur.execute("SELECT 1 FROM users WHERE id = %s", (user_id,))
-                if not cur.fetchone():
-                    logger.warning(f"⚠️ Пользователь {user_id} не найден при сохранении диалога")
-                    # Создаем минимальную запись
-                    cur.execute("""
-                        INSERT INTO users (id)
-                        VALUES (%s)
-                        ON CONFLICT (id) DO NOTHING;
-                    """, (user_id,))
-                
-                # Сохраняем/обновляем диалог
-                cur.execute("""
-                    INSERT INTO active_conversations (user_id, conversation_type, assigned_owner, last_message)
-                    VALUES (%s, %s, %s, %s)
-                    ON CONFLICT (user_id) DO UPDATE
-                    SET conversation_type = EXCLUDED.conversation_type,
-                        assigned_owner = EXCLUDED.assigned_owner,
-                        last_message = EXCLUDED.last_message,
-                        updated_at = CURRENT_TIMESTAMP;
-                """, (user_id, conversation_type, assigned_owner, last_message))
-    except Exception as e:
-        logger.error(f"❌ Ошибка сохранения активного диалога: {e}")
+    """Сохраняет активный диалог в буфер"""
+    global active_conv_buffer
+    active_conv_buffer.append((user_id, conversation_type, assigned_owner, last_message))
+    
+    # Сбрасываем буфер при достижении лимита
+    if len(active_conv_buffer) >= BUFFER_MAX_SIZE:
+        flush_active_conv_buffer()
 
 def delete_active_conversation(user_id):
     """Удаляет активный диалог из базы данных"""
@@ -161,7 +230,15 @@ def delete_active_conversation(user_id):
         logger.error(f"❌ Ошибка удаления активного диалога: {e}")
 
 def get_conversation_history(user_id, limit=50):
-    """Возвращает историю сообщений для пользователя"""
+    """Возвращает историю сообщений для пользователя (с кэшированием)"""
+    # Сначала сбрасываем буфер, чтобы получить актуальные данные
+    flush_message_buffer()
+    
+    # Используем кэш, если есть
+    cache_key = f"{user_id}_{limit}"
+    if cache_key in history_cache:
+        return history_cache[cache_key]
+    
     try:
         with psycopg.connect(DATABASE_URL) as conn:
             with conn.cursor(row_factory=dict_row) as cur:
@@ -171,7 +248,9 @@ def get_conversation_history(user_id, limit=50):
                     ORDER BY created_at DESC
                     LIMIT %s
                 """, (user_id, limit))
-                return cur.fetchall()
+                history = cur.fetchall()
+                history_cache[cache_key] = history
+                return history
     except Exception as e:
         logger.error(f"❌ Ошибка получения истории сообщений: {e}")
         return []
@@ -200,6 +279,9 @@ def get_total_users_count():
 
 # Инициализируем базу данных при старте
 init_db()
+
+# Запускаем поток для сброса буферов
+threading.Thread(target=buffer_flush_thread, daemon=True).start()
 
 # Функции для работы с данными
 def load_stats():
@@ -624,6 +706,9 @@ class TelegramBot:
             return
             
         try:
+            # Сначала сбрасываем буфер активных диалогов
+            flush_active_conv_buffer()
+            
             with psycopg.connect(DATABASE_URL) as conn:
                 with conn.cursor(row_factory=dict_row) as cur:
                     cur.execute("""
@@ -641,15 +726,11 @@ class TelegramBot:
             message = "🔄 Активные чаты:\n\n"
             keyboard = []
             for chat in active_chats:
-                # Получаем актуальную информацию о пользователе из словаря
-                if chat['user_id'] in active_conversations:
-                    client_info = active_conversations[chat['user_id']]['user_info']
-                else:
-                    # Если почему-то нет в active_conversations, используем данные из БД
-                    client_info = {
-                        'first_name': chat['first_name'] or 'Неизвестный',
-                        'username': chat['username'] or 'N/A'
-                    }
+                # Получаем актуальную информацию о пользователе
+                client_info = {
+                    'first_name': chat['first_name'] or 'Неизвестный',
+                    'username': chat['username'] or 'N/A'
+                }
                 
                 # Добавим информацию о назначенном владельце
                 owner_info = "Не назначен"
@@ -662,11 +743,10 @@ class TelegramBot:
                         owner_info = f"ID: {chat['assigned_owner']}"
                 
                 # Форматируем имя пользователя
-                username = f"@{client_info.username}" if hasattr(client_info, 'username') and client_info.username else "нет"
-                first_name = client_info.first_name if hasattr(client_info, 'first_name') else chat['first_name']
+                username = f"@{client_info['username']}" if client_info['username'] else "нет"
                 
                 message += (
-                    f"👤 {first_name} ({username})\n"
+                    f"👤 {client_info['first_name']} ({username})\n"
                     f"   Тип: {chat['conversation_type']}\n"
                     f"   Назначен: {owner_info}\n"
                     f"   Последнее сообщение: {chat['last_message'][:50]}{'...' if len(chat['last_message']) > 50 else ''}\n"
@@ -676,7 +756,7 @@ class TelegramBot:
                 # Добавляем кнопку "Продолжить" для каждого чата
                 keyboard.append([
                     InlineKeyboardButton(
-                        f"Продолжить диалог с {first_name}",
+                        f"Продолжить диалог с {client_info['first_name']}",
                         callback_data=f'continue_chat_{chat["user_id"]}'
                     )
                 ])
