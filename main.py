@@ -548,7 +548,7 @@ class TelegramBot:
 👉 Тут ви знайдете:
 - 🆕 Актуальні товари та послуги
 - 🔥 Спеціальні пропозиції та знижки
-- � Розіграші та акції
+- 🎁 Розіграші та акції
 - ℹ️ Важливі оновлення сервісу
 
 Приєднуйтесь, щоб бути в курсі всіх новин! 👇
@@ -1098,13 +1098,36 @@ class TelegramBot:
         # Меню Duolingo
         elif query.data == 'category_duolingo':
             keyboard = [
-                [InlineKeyboardButton("👤 Individual (1 місяць) - 200 UAH", callback_data='duolingo_ind_1')],
-                [InlineKeyboardButton("👤 Individual (12 місяців) - 1500 UAH", callback_data='duolingo_ind_12')],
-                [InlineKeyboardButton("👨‍👩‍👧‍👦 Family (12 місяців) - 380 UAH", callback_data='duolingo_fam_12')],
+                [InlineKeyboardButton("👨‍👩‍👧‍👦 Family", callback_data='duolingo_family')],
+                [InlineKeyboardButton("👤 Individual", callback_data='duolingo_individual')],
                 [InlineKeyboardButton("⬅️ Назад", callback_data='order')]
             ]
             await query.edit_message_text(
-                "📚 Оберіть варіант Duolingo:",
+                "📚 Оберіть тип підписки Duolingo:",
+                reply_markup=InlineKeyboardMarkup(keyboard)
+            )
+        
+        # Подменю Duolingo Family
+        elif query.data == 'duolingo_family':
+            keyboard = [
+                # Добавлено уточнение "на 1 людину"
+                [InlineKeyboardButton("12 місяців - 380 UAH (на 1 людину)", callback_data='duolingo_fam_12')],
+                [InlineKeyboardButton("⬅️ Назад", callback_data='category_duolingo')]
+            ]
+            await query.edit_message_text(
+                "👨‍👩‍👧‍👦 Duolingo Family:",
+                reply_markup=InlineKeyboardMarkup(keyboard)
+            )
+        
+        # Подменю Duolingo Individual
+        elif query.data == 'duolingo_individual':
+            keyboard = [
+                [InlineKeyboardButton("1 місяць - 200 UAH", callback_data='duolingo_ind_1')],
+                [InlineKeyboardButton("12 місяців - 1500 UAH", callback_data='duolingo_ind_12')],
+                [InlineKeyboardButton("⬅️ Назад", callback_data='category_duolingo')]
+            ]
+            await query.edit_message_text(
+                "👤 Duolingo Individual:",
                 reply_markup=InlineKeyboardMarkup(keyboard)
             )
         
@@ -1699,9 +1722,9 @@ class TelegramBot:
             'discord_basic_12': 'discord_basic',
             'discord_full_1': 'discord_full',
             'discord_full_12': 'discord_full',
-            'duolingo_ind_1': 'category_duolingo',
-            'duolingo_ind_12': 'category_duolingo',
-            'duolingo_fam_12': 'category_duolingo',
+            'duolingo_ind_1': 'duolingo_individual',
+            'duolingo_ind_12': 'duolingo_individual',
+            'duolingo_fam_12': 'duolingo_family',
         }
         return category_map.get(product_code, 'order')
 
