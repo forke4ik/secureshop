@@ -548,7 +548,7 @@ class TelegramBot:
 👉 Тут ви знайдете:
 - 🆕 Актуальні товари та послуги
 - 🔥 Спеціальні пропозиції та знижки
-- 🎁 Розіграші та акції
+- � Розіграші та акції
 - ℹ️ Важливі оновлення сервісу
 
 Приєднуйтесь, щоб бути в курсі всіх новин! 👇
@@ -565,6 +565,7 @@ class TelegramBot:
             [InlineKeyboardButton("💬 ChatGPT", callback_data='category_chatgpt')],
             [InlineKeyboardButton("🎵 Spotify", callback_data='category_spotify')],
             [InlineKeyboardButton("🎮 Discord", callback_data='category_discord')],
+            [InlineKeyboardButton("📚 Duolingo", callback_data='category_duolingo')],
             [InlineKeyboardButton("⬅️ Назад", callback_data='back_to_main')]
         ]
         await update.message.reply_text(
@@ -971,6 +972,7 @@ class TelegramBot:
                 [InlineKeyboardButton("💬 ChatGPT", callback_data='category_chatgpt')],
                 [InlineKeyboardButton("🎵 Spotify", callback_data='category_spotify')],
                 [InlineKeyboardButton("🎮 Discord", callback_data='category_discord')],
+                [InlineKeyboardButton("📚 Duolingo", callback_data='category_duolingo')],
                 [InlineKeyboardButton("⬅️ Назад", callback_data='back_to_main')]
             ]
             await query.edit_message_text(
@@ -1093,6 +1095,19 @@ class TelegramBot:
                 reply_markup=InlineKeyboardMarkup(keyboard)
             )
         
+        # Меню Duolingo
+        elif query.data == 'category_duolingo':
+            keyboard = [
+                [InlineKeyboardButton("👤 Individual (1 місяць) - 200 UAH", callback_data='duolingo_ind_1')],
+                [InlineKeyboardButton("👤 Individual (12 місяців) - 1500 UAH", callback_data='duolingo_ind_12')],
+                [InlineKeyboardButton("👨‍👩‍👧‍👦 Family (12 місяців) - 380 UAH", callback_data='duolingo_fam_12')],
+                [InlineKeyboardButton("⬅️ Назад", callback_data='order')]
+            ]
+            await query.edit_message_text(
+                "📚 Оберіть варіант Duolingo:",
+                reply_markup=InlineKeyboardMarkup(keyboard)
+            )
+        
         # Обработка выбора товара
         elif query.data in [
             'youtube_6', 'youtube_12',
@@ -1100,7 +1115,8 @@ class TelegramBot:
             'spotify_ind_1', 'spotify_ind_3', 'spotify_ind_6', 'spotify_ind_12',
             'spotify_fam_1', 'spotify_fam_3', 'spotify_fam_6', 'spotify_fam_12',
             'discord_basic_1', 'discord_basic_12',
-            'discord_full_1', 'discord_full_12'
+            'discord_full_1', 'discord_full_12',
+            'duolingo_ind_1', 'duolingo_ind_12', 'duolingo_fam_12'
         ]:
             # Сохраняем выбранный товар в контексте
             context.user_data['selected_product'] = query.data
@@ -1659,6 +1675,9 @@ class TelegramBot:
             'discord_basic_12': {'name': "Discord Nitro Basic (12 місяців)", 'price': 900},
             'discord_full_1': {'name': "Discord Nitro Full (1 місяць)", 'price': 170},
             'discord_full_12': {'name': "Discord Nitro Full (12 місяців)", 'price': 1700},
+            'duolingo_ind_1': {'name': "Duolingo Individual (1 місяць)", 'price': 200},
+            'duolingo_ind_12': {'name': "Duolingo Individual (12 місяців)", 'price': 1500},
+            'duolingo_fam_12': {'name': "Duolingo Family (12 місяців)", 'price': 380},
         }
         return products.get(product_code, {'name': "Невідомий товар", 'price': 0})
     
@@ -1680,6 +1699,9 @@ class TelegramBot:
             'discord_basic_12': 'discord_basic',
             'discord_full_1': 'discord_full',
             'discord_full_12': 'discord_full',
+            'duolingo_ind_1': 'category_duolingo',
+            'duolingo_ind_12': 'category_duolingo',
+            'duolingo_fam_12': 'category_duolingo',
         }
         return category_map.get(product_code, 'order')
 
