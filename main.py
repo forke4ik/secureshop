@@ -570,6 +570,7 @@ class TelegramBot:
         await update.message.reply_text(
             "📦 Оберіть категорію товару:",
             reply_markup=InlineKeyboardMarkup(keyboard)
+        )
     
     async def question_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Обработчик команды /question"""
@@ -975,6 +976,7 @@ class TelegramBot:
             await query.edit_message_text(
                 "📦 Оберіть категорію товару:",
                 reply_markup=InlineKeyboardMarkup(keyboard)
+            )
         
         # Кнопка "Назад" в главное меню
         elif query.data == 'back_to_main':
@@ -986,6 +988,7 @@ class TelegramBot:
             await query.edit_message_text(
                 "Головне меню:",
                 reply_markup=InlineKeyboardMarkup(keyboard)
+            )
         
         # Обработка кнопки "help"
         elif query.data == 'help':
@@ -999,7 +1002,8 @@ class TelegramBot:
             ]
             await query.edit_message_text(
                 "💬 Оберіть варіант ChatGPT Plus:",
-                reply_markup=InlineKeyboardMarkup(keyboard))
+                reply_markup=InlineKeyboardMarkup(keyboard)
+            )
         
         # Меню Discord
         elif query.data == 'category_discord':
@@ -1010,7 +1014,8 @@ class TelegramBot:
             ]
             await query.edit_message_text(
                 "🎮 Оберіть тип Discord Nitro:",
-                reply_markup=InlineKeyboardMarkup(keyboard))
+                reply_markup=InlineKeyboardMarkup(keyboard)
+            )
         
         # Подменю Discord Basic
         elif query.data == 'discord_basic':
@@ -1021,7 +1026,8 @@ class TelegramBot:
             ]
             await query.edit_message_text(
                 "🔹 Discord Nitro Basic:",
-                reply_markup=InlineKeyboardMarkup(keyboard))
+                reply_markup=InlineKeyboardMarkup(keyboard)
+            )
         
         # Подменю Discord Full
         elif query.data == 'discord_full':
@@ -1032,7 +1038,8 @@ class TelegramBot:
             ]
             await query.edit_message_text(
                 "✨ Discord Nitro Full:",
-                reply_markup=InlineKeyboardMarkup(keyboard))
+                reply_markup=InlineKeyboardMarkup(keyboard)
+            )
         
         # Меню Duolingo
         elif query.data == 'category_duolingo':
@@ -1043,7 +1050,8 @@ class TelegramBot:
             ]
             await query.edit_message_text(
                 "📚 Оберіть тип підписки Duolingo:",
-                reply_markup=InlineKeyboardMarkup(keyboard))
+                reply_markup=InlineKeyboardMarkup(keyboard)
+            )
         
         # Подменю Duolingo Family
         elif query.data == 'duolingo_family':
@@ -1053,7 +1061,8 @@ class TelegramBot:
             ]
             await query.edit_message_text(
                 "👨‍👩‍👧‍👦 Duolingo Family:",
-                reply_markup=InlineKeyboardMarkup(keyboard))
+                reply_markup=InlineKeyboardMarkup(keyboard)
+            )
         
         # Подменю Duolingo Individual
         elif query.data == 'duolingo_individual':
@@ -1064,7 +1073,8 @@ class TelegramBot:
             ]
             await query.edit_message_text(
                 "👤 Duolingo Individual:",
-                reply_markup=InlineKeyboardMarkup(keyboard))
+                reply_markup=InlineKeyboardMarkup(keyboard)
+            )
         
         # Меню PicsArt
         elif query.data == 'category_picsart':
@@ -1075,7 +1085,8 @@ class TelegramBot:
             ]
             await query.edit_message_text(
                 "📸 Оберіть версію PicsArt:",
-                reply_markup=InlineKeyboardMarkup(keyboard))
+                reply_markup=InlineKeyboardMarkup(keyboard)
+            )
         
         # Подменю PicsArt Plus
         elif query.data == 'picsart_plus':
@@ -1086,7 +1097,8 @@ class TelegramBot:
             ]
             await query.edit_message_text(
                 "✨ PicsArt Plus:",
-                reply_markup=InlineKeyboardMarkup(keyboard))
+                reply_markup=InlineKeyboardMarkup(keyboard)
+            )
         
         # Подменю PicsArt Pro
         elif query.data == 'picsart_pro':
@@ -1097,7 +1109,8 @@ class TelegramBot:
             ]
             await query.edit_message_text(
                 "🚀 PicsArt Pro:",
-                reply_markup=InlineKeyboardMarkup(keyboard))
+                reply_markup=InlineKeyboardMarkup(keyboard)
+            )
         
         # Обработка выбора товара
         elif query.data in [
@@ -1124,7 +1137,8 @@ class TelegramBot:
                 f"{product_info['name']}\n"
                 f"💵 Ціна: {product_info['price']} UAH\n\n"
                 f"Натисніть \"✅ Замовити\" для підтвердження замовлення.",
-                reply_markup=InlineKeyboardMarkup(keyboard))
+                reply_markup=InlineKeyboardMarkup(keyboard)
+            )
         
         # Подтверждение заказа
         elif query.data == 'confirm_order':
