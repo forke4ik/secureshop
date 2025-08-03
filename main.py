@@ -561,17 +561,15 @@ class TelegramBot:
     async def order_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Обработчик команды /order"""
         keyboard = [
-            [InlineKeyboardButton("📺 YouTube", callback_data='category_youtube')],
             [InlineKeyboardButton("💬 ChatGPT", callback_data='category_chatgpt')],
-            [InlineKeyboardButton("🎵 Spotify", callback_data='category_spotify')],
             [InlineKeyboardButton("🎮 Discord", callback_data='category_discord')],
             [InlineKeyboardButton("📚 Duolingo", callback_data='category_duolingo')],
+            [InlineKeyboardButton("📸 PicsArt", callback_data='category_picsart')],
             [InlineKeyboardButton("⬅️ Назад", callback_data='back_to_main')]
         ]
         await update.message.reply_text(
             "📦 Оберіть категорію товару:",
             reply_markup=InlineKeyboardMarkup(keyboard)
-        )
     
     async def question_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Обработчик команды /question"""
@@ -968,17 +966,15 @@ class TelegramBot:
         # Главное меню
         if query.data == 'order':
             keyboard = [
-                [InlineKeyboardButton("📺 YouTube", callback_data='category_youtube')],
                 [InlineKeyboardButton("💬 ChatGPT", callback_data='category_chatgpt')],
-                [InlineKeyboardButton("🎵 Spotify", callback_data='category_spotify')],
                 [InlineKeyboardButton("🎮 Discord", callback_data='category_discord')],
                 [InlineKeyboardButton("📚 Duolingo", callback_data='category_duolingo')],
+                [InlineKeyboardButton("📸 PicsArt", callback_data='category_picsart')],
                 [InlineKeyboardButton("⬅️ Назад", callback_data='back_to_main')]
             ]
             await query.edit_message_text(
                 "📦 Оберіть категорію товару:",
                 reply_markup=InlineKeyboardMarkup(keyboard)
-            )
         
         # Кнопка "Назад" в главное меню
         elif query.data == 'back_to_main':
@@ -990,23 +986,10 @@ class TelegramBot:
             await query.edit_message_text(
                 "Головне меню:",
                 reply_markup=InlineKeyboardMarkup(keyboard)
-            )
         
         # Обработка кнопки "help"
         elif query.data == 'help':
             await self.show_help(query.message)
-        
-        # Меню YouTube
-        elif query.data == 'category_youtube':
-            keyboard = [
-                [InlineKeyboardButton("6 місяців - 450 UAH", callback_data='youtube_6')],
-                [InlineKeyboardButton("12 місяців - 750 UAH", callback_data='youtube_12')],
-                [InlineKeyboardButton("⬅️ Назад", callback_data='order')]
-            ]
-            await query.edit_message_text(
-                "📺 Оберіть варіант YouTube Premium:",
-                reply_markup=InlineKeyboardMarkup(keyboard)
-            )
         
         # Меню ChatGPT
         elif query.data == 'category_chatgpt':
@@ -1016,48 +999,7 @@ class TelegramBot:
             ]
             await query.edit_message_text(
                 "💬 Оберіть варіант ChatGPT Plus:",
-                reply_markup=InlineKeyboardMarkup(keyboard)
-            )
-        
-        # Меню Spotify
-        elif query.data == 'category_spotify':
-            keyboard = [
-                [InlineKeyboardButton("Premium Individual", callback_data='spotify_individual')],
-                [InlineKeyboardButton("Premium Family", callback_data='spotify_family')],
-                [InlineKeyboardButton("⬅️ Назад", callback_data='order')]
-            ]
-            await query.edit_message_text(
-                "🎵 Оберіть тип Spotify Premium:",
-                reply_markup=InlineKeyboardMarkup(keyboard)
-            )
-        
-        # Подменю Spotify Individual
-        elif query.data == 'spotify_individual':
-            keyboard = [
-                [InlineKeyboardButton("1 місяць - 125 UAH", callback_data='spotify_ind_1')],
-                [InlineKeyboardButton("3 місяці - 350 UAH", callback_data='spotify_ind_3')],
-                [InlineKeyboardButton("6 місяців - 550 UAH", callback_data='spotify_ind_6')],
-                [InlineKeyboardButton("12 місяців - 900 UAH", callback_data='spotify_ind_12')],
-                [InlineKeyboardButton("⬅️ Назад", callback_data='category_spotify')]
-            ]
-            await query.edit_message_text(
-                "👤 Spotify Premium Individual:",
-                reply_markup=InlineKeyboardMarkup(keyboard)
-            )
-        
-        # Подменю Spotify Family
-        elif query.data == 'spotify_family':
-            keyboard = [
-                [InlineKeyboardButton("1 місяць - 200 UAH", callback_data='spotify_fam_1')],
-                [InlineKeyboardButton("3 місяці - 569 UAH", callback_data='spotify_fam_3')],
-                [InlineKeyboardButton("6 місяців - 1100 UAH", callback_data='spotify_fam_6')],
-                [InlineKeyboardButton("12 місяців - 2100 UAH", callback_data='spotify_fam_12')],
-                [InlineKeyboardButton("⬅️ Назад", callback_data='category_spotify')]
-            ]
-            await query.edit_message_text(
-                "👨‍👩‍👧‍👦 Spotify Premium Family:",
-                reply_markup=InlineKeyboardMarkup(keyboard)
-            )
+                reply_markup=InlineKeyboardMarkup(keyboard))
         
         # Меню Discord
         elif query.data == 'category_discord':
@@ -1068,8 +1010,7 @@ class TelegramBot:
             ]
             await query.edit_message_text(
                 "🎮 Оберіть тип Discord Nitro:",
-                reply_markup=InlineKeyboardMarkup(keyboard)
-            )
+                reply_markup=InlineKeyboardMarkup(keyboard))
         
         # Подменю Discord Basic
         elif query.data == 'discord_basic':
@@ -1080,8 +1021,7 @@ class TelegramBot:
             ]
             await query.edit_message_text(
                 "🔹 Discord Nitro Basic:",
-                reply_markup=InlineKeyboardMarkup(keyboard)
-            )
+                reply_markup=InlineKeyboardMarkup(keyboard))
         
         # Подменю Discord Full
         elif query.data == 'discord_full':
@@ -1092,8 +1032,7 @@ class TelegramBot:
             ]
             await query.edit_message_text(
                 "✨ Discord Nitro Full:",
-                reply_markup=InlineKeyboardMarkup(keyboard)
-            )
+                reply_markup=InlineKeyboardMarkup(keyboard))
         
         # Меню Duolingo
         elif query.data == 'category_duolingo':
@@ -1104,20 +1043,17 @@ class TelegramBot:
             ]
             await query.edit_message_text(
                 "📚 Оберіть тип підписки Duolingo:",
-                reply_markup=InlineKeyboardMarkup(keyboard)
-            )
+                reply_markup=InlineKeyboardMarkup(keyboard))
         
         # Подменю Duolingo Family
         elif query.data == 'duolingo_family':
             keyboard = [
-                # Добавлено уточнение "на 1 людину"
                 [InlineKeyboardButton("12 місяців - 380 UAH (на 1 людину)", callback_data='duolingo_fam_12')],
                 [InlineKeyboardButton("⬅️ Назад", callback_data='category_duolingo')]
             ]
             await query.edit_message_text(
                 "👨‍👩‍👧‍👦 Duolingo Family:",
-                reply_markup=InlineKeyboardMarkup(keyboard)
-            )
+                reply_markup=InlineKeyboardMarkup(keyboard))
         
         # Подменю Duolingo Individual
         elif query.data == 'duolingo_individual':
@@ -1128,18 +1064,49 @@ class TelegramBot:
             ]
             await query.edit_message_text(
                 "👤 Duolingo Individual:",
-                reply_markup=InlineKeyboardMarkup(keyboard)
-            )
+                reply_markup=InlineKeyboardMarkup(keyboard))
+        
+        # Меню PicsArt
+        elif query.data == 'category_picsart':
+            keyboard = [
+                [InlineKeyboardButton("✨ PicsArt Plus", callback_data='picsart_plus')],
+                [InlineKeyboardButton("🚀 PicsArt Pro", callback_data='picsart_pro')],
+                [InlineKeyboardButton("⬅️ Назад", callback_data='order')]
+            ]
+            await query.edit_message_text(
+                "📸 Оберіть версію PicsArt:",
+                reply_markup=InlineKeyboardMarkup(keyboard))
+        
+        # Подменю PicsArt Plus
+        elif query.data == 'picsart_plus':
+            keyboard = [
+                [InlineKeyboardButton("1 місяць - 130 UAH", callback_data='picsart_plus_1')],
+                [InlineKeyboardButton("12 місяців - 800 UAH", callback_data='picsart_plus_12')],
+                [InlineKeyboardButton("⬅️ Назад", callback_data='category_picsart')]
+            ]
+            await query.edit_message_text(
+                "✨ PicsArt Plus:",
+                reply_markup=InlineKeyboardMarkup(keyboard))
+        
+        # Подменю PicsArt Pro
+        elif query.data == 'picsart_pro':
+            keyboard = [
+                [InlineKeyboardButton("1 місяць - 180 UAH", callback_data='picsart_pro_1')],
+                [InlineKeyboardButton("12 місяців - 1000 UAH", callback_data='picsart_pro_12')],
+                [InlineKeyboardButton("⬅️ Назад", callback_data='category_picsart')]
+            ]
+            await query.edit_message_text(
+                "🚀 PicsArt Pro:",
+                reply_markup=InlineKeyboardMarkup(keyboard))
         
         # Обработка выбора товара
         elif query.data in [
-            'youtube_6', 'youtube_12',
             'chatgpt_1',
-            'spotify_ind_1', 'spotify_ind_3', 'spotify_ind_6', 'spotify_ind_12',
-            'spotify_fam_1', 'spotify_fam_3', 'spotify_fam_6', 'spotify_fam_12',
             'discord_basic_1', 'discord_basic_12',
             'discord_full_1', 'discord_full_12',
-            'duolingo_ind_1', 'duolingo_ind_12', 'duolingo_fam_12'
+            'duolingo_ind_1', 'duolingo_ind_12', 'duolingo_fam_12',
+            'picsart_plus_1', 'picsart_plus_12',
+            'picsart_pro_1', 'picsart_pro_12'
         ]:
             # Сохраняем выбранный товар в контексте
             context.user_data['selected_product'] = query.data
@@ -1157,8 +1124,7 @@ class TelegramBot:
                 f"{product_info['name']}\n"
                 f"💵 Ціна: {product_info['price']} UAH\n\n"
                 f"Натисніть \"✅ Замовити\" для підтвердження замовлення.",
-                reply_markup=InlineKeyboardMarkup(keyboard)
-            )
+                reply_markup=InlineKeyboardMarkup(keyboard))
         
         # Подтверждение заказа
         elif query.data == 'confirm_order':
@@ -1683,17 +1649,7 @@ class TelegramBot:
     def get_product_info(self, product_code):
         """Возвращает информацию о товаре по его коду"""
         products = {
-            'youtube_6': {'name': "YouTube Premium (6 місяців)", 'price': 450},
-            'youtube_12': {'name': "YouTube Premium (12 місяців)", 'price': 750},
             'chatgpt_1': {'name': "ChatGPT Plus (1 місяць)", 'price': 650},
-            'spotify_ind_1': {'name': "Spotify Premium Individual (1 місяць)", 'price': 125},
-            'spotify_ind_3': {'name': "Spotify Premium Individual (3 місяці)", 'price': 350},
-            'spotify_ind_6': {'name': "Spotify Premium Individual (6 місяців)", 'price': 550},
-            'spotify_ind_12': {'name': "Spotify Premium Individual (12 місяців)", 'price': 900},
-            'spotify_fam_1': {'name': "Spotify Premium Family (1 місяць)", 'price': 200},
-            'spotify_fam_3': {'name': "Spotify Premium Family (3 місяці)", 'price': 569},
-            'spotify_fam_6': {'name': "Spotify Premium Family (6 місяців)", 'price': 1100},
-            'spotify_fam_12': {'name': "Spotify Premium Family (12 місяців)", 'price': 2100},
             'discord_basic_1': {'name': "Discord Nitro Basic (1 місяць)", 'price': 100},
             'discord_basic_12': {'name': "Discord Nitro Basic (12 місяців)", 'price': 900},
             'discord_full_1': {'name': "Discord Nitro Full (1 місяць)", 'price': 170},
@@ -1701,23 +1657,18 @@ class TelegramBot:
             'duolingo_ind_1': {'name': "Duolingo Individual (1 місяць)", 'price': 200},
             'duolingo_ind_12': {'name': "Duolingo Individual (12 місяців)", 'price': 1500},
             'duolingo_fam_12': {'name': "Duolingo Family (12 місяців)", 'price': 380},
+            # Новые товары PicsArt
+            'picsart_plus_1': {'name': "PicsArt Plus (1 місяць)", 'price': 130},
+            'picsart_plus_12': {'name': "PicsArt Plus (12 місяців)", 'price': 800},
+            'picsart_pro_1': {'name': "PicsArt Pro (1 місяць)", 'price': 180},
+            'picsart_pro_12': {'name': "PicsArt Pro (12 місяців)", 'price': 1000},
         }
         return products.get(product_code, {'name': "Невідомий товар", 'price': 0})
     
     def get_back_action(self, product_code):
         """Возвращает действие для кнопки 'Назад' в зависимости от товара"""
         category_map = {
-            'youtube_6': 'category_youtube',
-            'youtube_12': 'category_youtube',
             'chatgpt_1': 'category_chatgpt',
-            'spotify_ind_1': 'spotify_individual',
-            'spotify_ind_3': 'spotify_individual',
-            'spotify_ind_6': 'spotify_individual',
-            'spotify_ind_12': 'spotify_individual',
-            'spotify_fam_1': 'spotify_family',
-            'spotify_fam_3': 'spotify_family',
-            'spotify_fam_6': 'spotify_family',
-            'spotify_fam_12': 'spotify_family',
             'discord_basic_1': 'discord_basic',
             'discord_basic_12': 'discord_basic',
             'discord_full_1': 'discord_full',
@@ -1725,6 +1676,11 @@ class TelegramBot:
             'duolingo_ind_1': 'duolingo_individual',
             'duolingo_ind_12': 'duolingo_individual',
             'duolingo_fam_12': 'duolingo_family',
+            # Новые товары PicsArt
+            'picsart_plus_1': 'picsart_plus',
+            'picsart_plus_12': 'picsart_plus',
+            'picsart_pro_1': 'picsart_pro',
+            'picsart_pro_12': 'picsart_pro',
         }
         return category_map.get(product_code, 'order')
 
