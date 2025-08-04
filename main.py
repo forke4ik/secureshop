@@ -4,6 +4,7 @@ import asyncio
 import threading
 import time
 import json
+import base64  # Добавлено для декодирования данных
 from datetime import datetime
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, User, BotCommandScopeChat
 from telegram.ext import Application, CommandHandler, MessageHandler, CallbackQueryHandler, filters, ContextTypes
@@ -482,48 +483,26 @@ class TelegramBot:
             save_stats()
         
         # Обработка заказов из веб-интерфейса
-        if context.args and context.args[0].startswith("buy_"):
+        if context.args and context.args[0].startswith("order_"):
             try:
-                # Парсим параметры заказа
-                order_data = context.args[0][4:]  # Убираем префикс "buy_"
-                items = []
-                current_item = {}
-                total = 0
+                # Получаем закодированные данные заказа
+                encoded_data = context.args[0][6:]  # Убираем префикс "order_"
                 
-                # Обрабатываем части заказа
-                parts = order_data.split(';')
-                for part in parts:
-                    if '=' not in part:
-                        continue
-                    
-                    key, value = part.split('=', 1)
-                    
-                    if key == 'service':
-                        if current_item:  # Сохраняем предыдущий товар
-                            items.append(current_item)
-                        current_item = {'service': value}
-                    elif key == 'plan':
-                        current_item['plan'] = value
-                    elif key == 'period':
-                        current_item['period'] = value
-                    elif key == 'price':
-                        current_item['price'] = int(value)
-                        total += current_item['price']
-                    elif key == 'total':
-                        total = int(value)
+                # Декодируем из base64
+                decoded_data = base64.b64decode(encoded_data).decode('utf-8')
                 
-                if current_item:  # Добавляем последний товар
-                    items.append(current_item)
+                # Парсим JSON
+                order_data = json.loads(decoded_data)
                 
                 # Формируем текст заказа
                 order_text = "🛍️ Замовлення з сайту:\n\n"
-                for item in items:
+                for item in order_data['items']:
                     service = item.get('service', 'Невідома послуга')
                     plan = item.get('plan', '')
                     period = item.get('period', '')
                     price = item.get('price', 0)
                     order_text += f"▫️ {service} {plan} ({period}) - {price} UAH\n"
-                order_text += f"\n💳 Всього: {total} UAH"
+                order_text += f"\n💳 Всього: {order_data['total']} UAH"
                 
                 # Сохраняем заказ
                 active_conversations[user.id] = {
