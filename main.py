@@ -472,36 +472,45 @@ class TelegramBot:
             logger.error(f"❌ Ошибка остановки polling: {e}")
     
     async def start(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Обработчик команды /start"""
-        user = update.effective_user
-        
-        # Гарантируем наличие пользователя в БД
-        ensure_user_exists(user)
-        
-        # Обновляем статистику
-        if user.id not in bot_statistics['active_users']:
-            bot_statistics['total_users'] += 1
-            bot_statistics['active_users'].append(user.id)
-            save_stats()
-        
-        # Для основателей: показываем особое приветствие
-        if user.id in [OWNER_ID_1, OWNER_ID_2]:
-            owner_name = "@HiGki2pYYY" if user.id == OWNER_ID_1 else "@oc33t"
-            await update.message.reply_text(
-                f"Добро пожаловать, {user.first_name}! ({owner_name})\n"
-                f"Вы вошли как основатель магазина."
-            )
-            return
-        
-        # Главное меню для обычных пользователей
-        keyboard = [
-            [InlineKeyboardButton("🛒 Зробити замовлення", callback_data='order')],
-            [InlineKeyboardButton("❓ Поставити запитання", callback_data='question')],
-            [InlineKeyboardButton("ℹ️ Допомога", callback_data='help')]
-        ]
-        reply_markup = InlineKeyboardMarkup(keyboard)
-        
-        welcome_message = f"""
+    """Обработчик команды /start с поддержкой deep linking с сайта"""
+    user = update.effective_user
+
+    # Гарантируем наличие пользователя в БД
+    ensure_user_exists(user)
+
+    # ПРОВЕРКА: Если команда /start была вызвана с параметрами (с сайта)
+    if context.args:
+        logger.info(f"Получены параметры deep link от {user.id}: {' '.join(context.args)}")
+        # Передаем управление обработчику /pay, который умеет парсить эти аргументы
+        await self.pay_command(update, context)
+        return
+
+    # ---- ЕСЛИ ПАРАМЕТРОВ НЕТ (обычный запуск /start) ----
+
+    # Обновляем статистику
+    if user.id not in bot_statistics['active_users']:
+        bot_statistics['total_users'] += 1
+        bot_statistics['active_users'].append(user.id)
+        save_stats()
+
+    # Для основателей: показываем особое приветствие
+    if user.id in [OWNER_ID_1, OWNER_ID_2]:
+        owner_name = "@HiGki2pYYY" if user.id == OWNER_ID_1 else "@oc33t"
+        await update.message.reply_text(
+            f"Добро пожаловать, {user.first_name}! ({owner_name})\n"
+            f"Вы вошли как основатель магазина."
+        )
+        return
+
+    # Главное меню для обычных пользователей
+    keyboard = [
+        [InlineKeyboardButton("🛒 Зробити замовлення", callback_data='order')],
+        [InlineKeyboardButton("❓ Поставити запитання", callback_data='question')],
+        [InlineKeyboardButton("ℹ️ Допомога", callback_data='help')]
+    ]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+
+    welcome_message = f"""
 Ласкаво просимо, {user.first_name}! 👋
 
 Я бот-помічник нашого магазину. Будь ласка, оберіть, що вас цікавить:
