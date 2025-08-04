@@ -1699,6 +1699,9 @@ async def forward_order_to_owners(self, context, client_id, client_info, order_t
             logger.info(f"✅ Уведомление отправлено владельцу {owner_id}")
         except Exception as e:
             logger.error(f"❌ Ошибка отправки заказа основателю {owner_id}: {e}")
+            logger.info(f"✅ Уведомление отправлено владельцу {owner_id}")
+        except Exception as e:
+            logger.error(f"❌ Ошибка отправки заказа основателю {owner_id}: {e}")
     
     async def handle_owner_message(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Обработка сообщений от основателя"""
