@@ -1657,16 +1657,19 @@ class TelegramBot:
             
             await self.forward_to_specific_owner(context, client_id, client_info, conversation_type, message_text, other_owner)
     
-    async def forward_order_to_owners(self, context, client_id, client_info, order_text):
-        """Пересылает заказ обоим владельцам"""
-        # Сохраняем последнее сообщение
-        active_conversations[client_id]['last_message'] = order_text
-        
-        # Сохраняем в БД
-        save_active_conversation(client_id, 'order', None, order_text)
-        
-        forward_message = f"""
-🛒 НОВЕ ЗАМОВЛЕННЯ!
+async def forward_order_to_owners(self, context, client_id, client_info, order_text):
+    """Пересылает заказ обоим владельцам"""
+    # Сохраняем последнее сообщение
+    active_conversations[client_id]['last_message'] = order_text
+    
+    # Сохраняем в БД
+    save_active_conversation(client_id, 'order', None, order_text)
+    
+    # Добавляем пометку о сайте, если заказ оттуда
+    source = "з сайту" if active_conversations[client_id].get('from_website') else ""
+    
+    forward_message = f"""
+🛒 НОВЕ ЗАМОВЛЕННЯ {source}!
 
 👤 Клієнт: {client_info.first_name}
 📱 Username: @{client_info.username if client_info.username else 'не вказано'}
@@ -1678,23 +1681,24 @@ class TelegramBot:
 
 ---
 Нажмите "✅ Взять", чтобы обработать этот заказ.
-        """
-        
-        keyboard = [
-            [InlineKeyboardButton("✅ Взять", callback_data=f'take_order_{client_id}')]
-        ]
-        reply_markup = InlineKeyboardMarkup(keyboard)
-        
-        # Отправляем обоим основателям
-        for owner_id in [OWNER_ID_1, OWNER_ID_2]:
-            try:
-                await context.bot.send_message(
-                    chat_id=owner_id,
-                    text=forward_message.strip(),
-                    reply_markup=reply_markup
-                )
-            except Exception as e:
-                logger.error(f"Ошибка отправки заказа основателю {owner_id}: {e}")
+    """
+    
+    keyboard = [
+        [InlineKeyboardButton("✅ Взять", callback_data=f'take_order_{client_id}')]
+    ]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    
+    # Отправляем обоим основателям
+    for owner_id in [OWNER_ID_1, OWNER_ID_2]:
+        try:
+            await context.bot.send_message(
+                chat_id=owner_id,
+                text=forward_message.strip(),
+                reply_markup=reply_markup
+            )
+            logger.info(f"✅ Уведомление отправлено владельцу {owner_id}")
+        except Exception as e:
+            logger.error(f"❌ Ошибка отправки заказа основателю {owner_id}: {e}")
     
     async def handle_owner_message(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Обработка сообщений от основателя"""
