@@ -471,6 +471,49 @@ class TelegramBot:
     async def start(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Обработчик команды /start"""
         user = update.effective_user
+
+          # Обработка заказов из веб-интерфейса
+    if context.args and context.args[0].startswith("buy_"):
+        try:
+            # ... (парсинг заказа)
+
+            # Сохраняем заказ
+            active_conversations[user.id] = {
+                'type': 'order',
+                'user_info': user,
+                'assigned_owner': None,
+                'order_details': order_text,
+                'last_message': order_text,
+                'from_website': True  # Флаг, что заказ с сайта
+            }
+            
+            # Сохраняем в БД
+            save_active_conversation(user.id, 'order', None, order_text)
+            
+            # Обновляем статистику
+            bot_statistics['total_orders'] += 1
+            save_stats()
+            
+            # Пересылаем заказ обоим владельцам
+            await self.forward_order_to_owners(  # <-- ЭТА СТРОКА ОБЯЗАТЕЛЬНА!
+                context, 
+                user.id, 
+                user, 
+                order_text
+            )
+            
+            await update.message.reply_text(
+                "✅ Ваше замовлення з сайту прийнято! Засновник магазину зв'яжеться з вами найближчим часом.\n\n"
+                "Ви можете продовжити з іншим запитанням або замовленням."
+            )
+            return
+            
+        except Exception as e:
+            logger.error(f"Помилка обробки замовлення з сайту: {e}")
+            await update.message.reply_text(
+                "❌ Сталася помилка при обробці вашого замовлення. Будь ласка, спробуйте ще раз."
+            )
+
         
         # Гарантируем наличие пользователя в БД
         ensure_user_exists(user)
