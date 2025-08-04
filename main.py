@@ -472,16 +472,17 @@ class TelegramBot:
             logger.error(f"❌ Ошибка остановки polling: {e}")
     
     async def start(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Обработчик команды /start с поддержкой deep linking с сайта"""
-        user = update.effective_user
+    user = update.effective_user
+    ensure_user_exists(user)
 
-        # Гарантируем наличие пользователя в БД
-        ensure_user_exists(user)
-
-        # ПРОВЕРКА: Если команда /start была вызвана с параметрами (с сайта)
-        if context.args:
-            logger.info(f"Получены параметры deep link от {user.id}: {' '.join(context.args)}")
-            # Передаем управление обработчику /pay, который умеет парсить эти аргументы
+    if context.args:
+        # Склеиваем аргументы в одну строку и обрабатываем как команду /pay
+        args_str = " ".join(context.args)
+        
+        # Если команда начинается с "/pay", обрабатываем её
+        if args_str.startswith("/pay"):
+            # Имитируем вызов команды /pay с правильными аргументами
+            context.args = args_str.split()[1:]  # Убираем "/pay"
             await self.pay_command(update, context)
             return
 
