@@ -471,7 +471,7 @@ class TelegramBot:
         except Exception as e:
             logger.error(f"❌ Ошибка остановки polling: {e}")
     
-    async def start(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+   async def start(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Обработчик команды /start с поддержкой deep linking с сайта"""
     user = update.effective_user
 
