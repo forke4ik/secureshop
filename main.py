@@ -481,6 +481,86 @@ class TelegramBot:
             bot_statistics['active_users'].append(user.id)
             save_stats()
         
+        # Обработка заказов из веб-интерфейса
+        if context.args and context.args[0].startswith("buy_"):
+            try:
+                # Парсим параметры заказа
+                order_data = context.args[0][4:]  # Убираем префикс "buy_"
+                items = []
+                current_item = {}
+                total = 0
+                
+                # Обрабатываем части заказа
+                for part in order_data.split(';'):
+                    if '=' not in part:
+                        continue
+                    
+                    key, value = part.split('=', 1)
+                    
+                    if key == 'service':
+                        if current_item:  # Сохраняем предыдущий товар
+                            items.append(current_item)
+                        current_item = {'service': value}
+                    elif key == 'plan':
+                        current_item['plan'] = value
+                    elif key == 'period':
+                        current_item['period'] = value
+                    elif key == 'price':
+                        current_item['price'] = int(value)
+                        total += current_item['price']
+                    elif key == 'total':
+                        total = int(value)
+                
+                if current_item:  # Добавляем последний товар
+                    items.append(current_item)
+                
+                # Формируем текст заказа
+                order_text = "🛍️ Замовлення з сайту:\n\n"
+                for item in items:
+                    service = item.get('service', 'Невідома послуга')
+                    plan = item.get('plan', '')
+                    period = item.get('period', '')
+                    price = item.get('price', 0)
+                    order_text += f"▫️ {service} {plan} ({period}) - {price} UAH\n"
+                order_text += f"\n💳 Всього: {total} UAH"
+                
+                # Сохраняем заказ
+                active_conversations[user.id] = {
+                    'type': 'order',
+                    'user_info': user,
+                    'assigned_owner': None,
+                    'order_details': order_text,
+                    'last_message': order_text
+                }
+                
+                # Сохраняем в БД
+                save_active_conversation(user.id, 'order', None, order_text)
+                
+                # Обновляем статистику
+                bot_statistics['total_orders'] += 1
+                save_stats()
+                
+                # Пересылаем заказ обоим владельцам
+                await self.forward_order_to_owners(
+                    context, 
+                    user.id, 
+                    user, 
+                    order_text
+                )
+                
+                await update.message.reply_text(
+                    "✅ Ваше замовлення з сайту прийнято! Засновник магазину зв'яжеться з вами найближчим часом.\n\n"
+                    "Ви можете продовжити з іншим запитанням або замовленням."
+                )
+                return
+                
+            except Exception as e:
+                logger.error(f"Помилка обробки замовлення з сайту: {e}")
+                await update.message.reply_text(
+                    "❌ Сталася помилка при обробці вашого замовлення. Будь ласка, спробуйте ще раз."
+                )
+
+        # Для основателей: показываем особое приветствие
         if user.id in [OWNER_ID_1, OWNER_ID_2]:
             owner_name = "@HiGki2pYYY" if user.id == OWNER_ID_1 else "@oc33t"
             await update.message.reply_text(
@@ -489,6 +569,7 @@ class TelegramBot:
             )
             return
         
+        # Главное меню для обычных пользователей
         keyboard = [
             [InlineKeyboardButton("🛒 Зробити замовлення", callback_data='order')],
             [InlineKeyboardButton("❓ Поставити запитання", callback_data='question')],
