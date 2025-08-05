@@ -14,6 +14,7 @@ from flask_cors import CORS
 import psycopg
 from psycopg.rows import dict_row
 import io
+from urllib.parse import unquote
 
 # Настройка логирования
 logging.basicConfig(
@@ -557,56 +558,83 @@ class TelegramBot:
             if args_str.startswith("pay"):
                 args_str = args_str[3:].strip()
             
-            # Парсим параметры с помощью регулярных выражений
-            params = {}
-            pattern = r'(\w+)=([^=]+?)(?=\s+\w+=|$)'
-            matches = re.findall(pattern, args_str)
+            # Декодируем URL-кодирование
+            args_str = unquote(args_str)
             
-            for key, value in matches:
-                params[key.lower()] = value.strip()
+            # Разбиваем на отдельные заказы
+            orders = []
+            if '_' in args_str:
+                # Несколько товаров в заказе
+                order_parts = args_str.split('_')
+                for part in order_parts:
+                    if 'service=' in part:
+                        orders.append(part)
+            else:
+                # Один товар в заказе
+                orders.append(args_str)
             
-            # Проверяем обязательные параметры
-            required = ['service', 'period', 'price']
-            for param in required:
-                if param not in params:
-                    await update.message.reply_text(
-                        f"❌ Отсутствует обязательный параметр: {param}\n\n"
-                        "Пожалуйста, укажите все необходимые параметры."
-                    )
+            # Обрабатываем каждый заказ
+            order_texts = []
+            total_price = 0
+            
+            for order_str in orders:
+                # Парсим параметры с помощью регулярных выражений
+                params = {}
+                pattern = r'(\w+)=([^=:]+)'
+                matches = re.findall(pattern, order_str)
+                
+                for key, value in matches:
+                    params[key.lower()] = value.strip()
+                
+                # Проверяем обязательные параметры
+                required = ['service', 'period', 'price']
+                for param in required:
+                    if param not in params:
+                        await update.message.reply_text(
+                            f"❌ Отсутствует обязательный параметр: {param}\n\n"
+                            "Пожалуйста, укажите все необходимые параметры."
+                        )
+                        return
+                
+                # Формируем текст заказа
+                service = params.get('service', 'Неизвестный сервис')
+                plan = params.get('plan', '')
+                period = params.get('period', '')
+                price = params.get('price', 0)
+                
+                try:
+                    price_val = int(price)
+                    total_price += price_val
+                except ValueError:
+                    await update.message.reply_text("❌ Неверный формат цены. Цена должна быть числом.")
                     return
+                
+                order_text = f"▫️ {service}"
+                if plan:
+                    order_text += f" {plan}"
+                order_text += f" ({period}) - {price} UAH"
+                order_texts.append(order_text)
             
-            # Формируем текст заказа
-            service = params.get('service', 'Неизвестный сервис')
-            plan = params.get('plan', '')
-            period = params.get('period', '')
-            price = params.get('price', 0)
-            
-            try:
-                price = int(price)
-            except ValueError:
-                await update.message.reply_text("❌ Неверный формат цены. Цена должна быть числом.")
-                return
-            
-            order_text = f"🛍️ Замовлення:\n\n▫️ {service}"
-            if plan:
-                order_text += f" {plan}"
-            order_text += f" ({period}) - {price} UAH"
+            # Формируем полный текст заказа
+            full_order_text = "🛍️ Замовлення:\n\n" + "\n".join(order_texts)
+            if len(orders) > 1:
+                full_order_text += f"\n\n💳 Всього: {total_price} UAH"
             
             # Создаем запись о заказе
             active_conversations[user_id] = {
                 'type': 'order',
                 'user_info': user,
                 'assigned_owner': None,
-                'order_details': order_text,
-                'last_message': order_text,
+                'order_details': full_order_text,
+                'last_message': full_order_text,
                 'from_website': True
             }
             
             # Сохраняем в БД
-            save_active_conversation(user_id, 'order', None, order_text)
+            save_active_conversation(user_id, 'order', None, full_order_text)
             
             # Обновляем статистику
-            bot_statistics['total_orders'] += 1
+            bot_statistics['total_orders'] += len(orders)
             save_stats()
             
             # Пересылаем заказ обоим владельцам
@@ -614,7 +642,7 @@ class TelegramBot:
                 context, 
                 user_id, 
                 user, 
-                order_text
+                full_order_text
             )
             
             await update.message.reply_text(
@@ -1483,19 +1511,19 @@ class TelegramBot:
             
             await query.edit_message_text(f"✅ Вы продолжили диалог с клиентом ID: {client_id}.")
     
-async def handle_message(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Обработчик текстовых сообщений"""
-    user = update.effective_user
-    user_id = user.id
-    
-    # Гарантируем наличие пользователя в БД
-    ensure_user_exists(user)
-    
-    # 🔴 КРИТИЧЕСКОЕ ИСПРАВЛЕНИЕ: сначала проверяем, является ли отправитель владельцем
-    if user_id in [OWNER_ID_1, OWNER_ID_2]:
-        await self.handle_owner_message(update, context)
-        return
-    
+    async def handle_message(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Обработчик текстовых сообщений"""
+        user = update.effective_user
+        user_id = user.id
+        
+        # Гарантируем наличие пользователя в БД
+        ensure_user_exists(user)
+        
+        # 🔴 КРИТИЧЕСКОЕ ИСПРАВЛЕНИЕ: сначала проверяем владельца
+        if user_id in [OWNER_ID_1, OWNER_ID_2]:
+            await self.handle_owner_message(update, context)
+            return
+        
         # Проверяем существование диалога
         if user_id not in active_conversations:
             keyboard = [
@@ -1509,10 +1537,6 @@ async def handle_message(self, update: Update, context: ContextTypes.DEFAULT_TYP
                 "Будь ласка, оберіть дію або використайте /start, щоб розпочати.",
                 reply_markup=reply_markup
             )
-            return
-        
-        if user_id in [OWNER_ID_1, OWNER_ID_2]:
-            await self.handle_owner_message(update, context)
             return
         
         # Сохраняем последнее сообщение
