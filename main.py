@@ -15,6 +15,9 @@ import psycopg
 from psycopg.rows import dict_row
 import io
 
+bot_running = False
+bot_lock = threading.Lock()
+
 # Настройка логирования
 logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
