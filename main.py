@@ -1893,9 +1893,27 @@ def index():
         'stats': bot_statistics
     }), 200
 
-@flask_app.route('/api/order', methods=['POST'])
-def api_create_order():  # Убираем async - Flask плохо работает с асинхронностью
+# Добавляем в начало файла
+from flask_cors import CORS
+
+# После создания flask_app
+flask_app = Flask(__name__)
+CORS(flask_app)  # Разрешаем CORS для всех доменов
+
+# Убираем предыдущие настройки CORS
+
+# Обновляем обработчик API
+@flask_app.route('/api/order', methods=['POST', 'OPTIONS'])
+def api_create_order():
     """API endpoint для создания заказа с сайта"""
+    # Обработка OPTIONS запроса для CORS
+    if request.method == 'OPTIONS':
+        response = jsonify({'status': 'ok'})
+        response.headers.add('Access-Control-Allow-Origin', '*')
+        response.headers.add('Access-Control-Allow-Headers', '*')
+        response.headers.add('Access-Control-Allow-Methods', '*')
+        return response
+    
     try:
         logger.info(f"Получен заказ с сайта: {request.json}")
         
@@ -1949,17 +1967,21 @@ def api_create_order():  # Убираем async - Flask плохо работа�
         save_stats()
         
         logger.info(f"✅ Заказ успешно обработан")
-        return jsonify({
+        response = jsonify({
             'success': True,
             'message': 'Замовлення успішно створено'
-        }), 200
+        })
+        response.headers.add('Access-Control-Allow-Origin', '*')
+        return response, 200
         
     except Exception as e:
         logger.error(f"❌ Критическая ошибка в /api/order: {e}", exc_info=True)
-        return jsonify({
+        response = jsonify({
             'success': False,
             'error': 'Внутрішня помилка сервера'
-        }), 500
+        })
+        response.headers.add('Access-Control-Allow-Origin', '*')
+        return response, 500
 async def setup_webhook():
     if USE_POLLING:
         try:
