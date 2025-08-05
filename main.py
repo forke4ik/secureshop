@@ -15,15 +15,16 @@ import psycopg
 from psycopg.rows import dict_row
 import io
 
-bot_running = False
-bot_lock = threading.Lock()
-
 # Настройка логирования
 logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     level=logging.INFO
 )
 logger = logging.getLogger(__name__)
+
+# Глобальные переменные состояния
+bot_running = False
+bot_lock = threading.Lock()
 
 # Конфигурация
 BOT_TOKEN = os.getenv('BOT_TOKEN', '8181378677:AAFullvwrNhPJMi_HxgC75qSEKWdKOtCpbw')
@@ -361,7 +362,7 @@ owner_client_map = {}
 # Глобальные переменные для приложения
 telegram_app = None
 flask_app = Flask(__name__)
-CORS(flask_app)  # Разрешаем CORS для всех доменов)  # Блокировка для управления доступом к боту
+CORS(flask_app)  # Разрешаем CORS для всех доменов
 
 class TelegramBot:
     def __init__(self):
@@ -486,10 +487,10 @@ class TelegramBot:
             # Склеиваем аргументы в одну строку
             args_str = " ".join(context.args)
             
-            # Если команда начинается с "/pay", обрабатываем её
-            if args_str.startswith("/pay"):
+            # Если команда начинается с "pay", обрабатываем её
+            if args_str.startswith("pay"):
                 # Имитируем вызов команды /pay
-                context.args = args_str.split()[1:]  # Убираем "/pay"
+                context.args = [args_str]
                 await self.pay_command(update, context)
                 return
             
@@ -531,47 +532,62 @@ class TelegramBot:
             reply_markup=reply_markup
         )
     
-# Заменить функцию pay_command на исправленную версию
-async def pay_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user = update.effective_user
-    user_id = user.id
-    ensure_user_exists(user)
-
-    # Обработка deep link с сайта
-    if context.args:
+    async def pay_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Обработчик команды /pay для создания заказа"""
+        user = update.effective_user
+        user_id = user.id
+        
+        # Гарантируем наличие пользователя в БД
+        ensure_user_exists(user)
+        
+        # Парсим параметры команды
         try:
-            # Объединяем все аргументы в одну строку
-            args_str = " ".join(context.args)
-            
-            # Если команда начинается с "/pay", обрабатываем
-            if args_str.startswith("pay"):
-                # Убираем "pay" из начала
-                args_str = args_str[4:].strip()
-                
-            # Разбираем параметры
-            params = {}
-            parts = args_str.split()
-            for part in parts:
-                if '=' in part:
-                    key, value = part.split('=', 1)
-                    params[key.strip().lower()] = value.strip()
-            
-            # Проверяем обязательные параметры
-            required = ['service', 'period', 'price']
-            if not all(param in params for param in required):
+            if not context.args:
                 await update.message.reply_text(
-                    "❌ Отсутствуют обязательные параметры: service, period, price\n\n"
-                    "Пример: /pay service=ChatGPT period=1 месяц price=650"
+                    "ℹ️ Для оплаты используйте команду в формате:\n"
+                    "/pay service=<название> plan=<тариф> period=<период> price=<цена>\n\n"
+                    "Например: /pay service=ChatGPT plan=Plus period=1 месяц price=650"
                 )
                 return
             
-            # Формируем заказ
-            service = params['service']
-            plan = params.get('plan', '')
-            period = params['period']
-            price = params['price']
+            # Собираем все аргументы в одну строку
+            args_str = " ".join(context.args)
             
-            order_text = f"🛍️ Замовлення з сайту:\n\n▫️ {service}"
+            # Если команда пришла из deep link (начинается с "pay")
+            if args_str.startswith("pay"):
+                args_str = args_str[3:].strip()
+            
+            # Парсим параметры с помощью регулярных выражений
+            params = {}
+            pattern = r'(\w+)=([^=]+?)(?=\s+\w+=|$)'
+            matches = re.findall(pattern, args_str)
+            
+            for key, value in matches:
+                params[key.lower()] = value.strip()
+            
+            # Проверяем обязательные параметры
+            required = ['service', 'period', 'price']
+            for param in required:
+                if param not in params:
+                    await update.message.reply_text(
+                        f"❌ Отсутствует обязательный параметр: {param}\n\n"
+                        "Пожалуйста, укажите все необходимые параметры."
+                    )
+                    return
+            
+            # Формируем текст заказа
+            service = params.get('service', 'Неизвестный сервис')
+            plan = params.get('plan', '')
+            period = params.get('period', '')
+            price = params.get('price', 0)
+            
+            try:
+                price = int(price)
+            except ValueError:
+                await update.message.reply_text("❌ Неверный формат цены. Цена должна быть числом.")
+                return
+            
+            order_text = f"🛍️ Замовлення:\n\n▫️ {service}"
             if plan:
                 order_text += f" {plan}"
             order_text += f" ({period}) - {price} UAH"
@@ -586,11 +602,14 @@ async def pay_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
                 'from_website': True
             }
             
+            # Сохраняем в БД
             save_active_conversation(user_id, 'order', None, order_text)
+            
+            # Обновляем статистику
             bot_statistics['total_orders'] += 1
             save_stats()
             
-            # Пересылаем заказ владельцам
+            # Пересылаем заказ обоим владельцам
             await self.forward_order_to_owners(
                 context, 
                 user_id, 
@@ -599,19 +618,15 @@ async def pay_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
             
             await update.message.reply_text(
-                "✅ Ваше замовлення прийнято! Засновник магазину зв'яжеться з вами найближчим часом."
+                "✅ Ваше замовлення прийнято! Засновник магазину зв'яжеться з вами найближчим часом.\n\n"
+                "Ви можете продовжити з іншим запитанням або замовленням."
             )
-            return
             
         except Exception as e:
-            logger.error(f"Помилка обробки команди /pay: {e}")
+            logger.error(f"Помилка обробки команди /pay: {e}", exc_info=True)
             await update.message.reply_text(
-                "❌ Помилка обробки замовлення. Будь ласка, спробуйте ще раз або зверніться до підтримки."
+                "❌ Сталася помилка при обробці вашого замовлення. Будь ласка, спробуйте ще раз."
             )
-            return
-
-    # Если нет аргументов - обычный запуск
-    await self.order_command(update, context)
     
     async def show_help(self, update: Update, context: ContextTypes.DEFAULT_TYPE = None):
         """Показывает справку и информацию о сервисе"""
@@ -1886,16 +1901,6 @@ def index():
         'stats': bot_statistics
     }), 200
 
-# Добавляем в начало файла
-from flask_cors import CORS
-
-# После создания flask_app
-flask_app = Flask(__name__)
-CORS(flask_app)  # Разрешаем CORS для всех доменов
-
-# Убираем предыдущие настройки CORS
-
-# Обновляем обработчик API
 @flask_app.route('/api/order', methods=['POST', 'OPTIONS'])
 def api_create_order():
     """API endpoint для создания заказа с сайта"""
@@ -1928,32 +1933,32 @@ def api_create_order():
                 'error': 'Пустий список товарів'
             }), 400
         
-        # Формируем текст заказа
-        order_text = "🛍️ Нове замовлення з сайту:\n\n"
-        for item in items:
-            service = item.get('service', 'Невідомий сервіс')
-            plan = item.get('plan', '')
-            period = item.get('period', '')
-            price = item.get('price', 0)
-            
-            order_text += f"▫️ {service}"
-            if plan:
-                order_text += f" {plan}"
-            order_text += f" ({period}) - {price} UAH\n"
+        # Формируем текст заказа для владельцев
+        owner_message = (
+            f"🛒 НОВЕ ЗАМОВЛЕННЯ З САЙТУ!\n\n"
+            f"💳 Сума: {total} UAH\n"
+            f"📦 Кількість товарів: {len(items)}\n\n"
+            "Деталі замовлення:\n"
+        )
         
-        order_text += f"\n💳 Всього: {total} UAH"
+        for i, item in enumerate(items, 1):
+            owner_message += (
+                f"{i}. {item.get('service', 'Невідомий сервис')} "
+                f"{item.get('plan', '')} "
+                f"({item.get('period', '')}) - "
+                f"{item.get('price', 0)} UAH\n"
+            )
         
-        # Синхронная отправка сообщений владельцам
+        # Отправляем владельцам
         for owner_id in [OWNER_ID_1, OWNER_ID_2]:
             try:
-                # Используем синхронный метод
                 bot_instance.application.bot.send_message(
                     chat_id=owner_id,
-                    text=order_text
+                    text=owner_message
                 )
                 logger.info(f"✅ Уведомление отправлено владельцу {owner_id}")
             except Exception as e:
-                logger.error(f"❌ Ошибка отправки владельцу {owner_id}: {e}")
+                logger.error(f"❌ Помилка відправки власнику {owner_id}: {e}")
         
         # Обновляем статистику
         bot_statistics['total_orders'] += 1
@@ -1975,6 +1980,7 @@ def api_create_order():
         })
         response.headers.add('Access-Control-Allow-Origin', '*')
         return response, 500
+
 async def setup_webhook():
     if USE_POLLING:
         try:
