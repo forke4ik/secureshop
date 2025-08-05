@@ -531,58 +531,47 @@ class TelegramBot:
             reply_markup=reply_markup
         )
     
-    async def pay_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Обработчик команды /pay для создания заказа"""
-        user = update.effective_user
-        user_id = user.id
-        
-        # Гарантируем наличие пользователя в БД
-        ensure_user_exists(user)
-        
-        # Парсим параметры команды
+# Заменить функцию pay_command на исправленную версию
+async def pay_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user = update.effective_user
+    user_id = user.id
+    ensure_user_exists(user)
+
+    # Обработка deep link с сайта
+    if context.args:
         try:
-            if not context.args:
-                await update.message.reply_text(
-                    "ℹ️ Для оплаты используйте команду в формате:\n"
-                    "/pay service=<название> plan=<тариф> period=<период> price=<цена>\n\n"
-                    "Например: /pay service=ChatGPT plan=Plus period=1 месяц price=650"
-                )
-                return
-            
-            # Собираем все аргументы в одну строку
+            # Объединяем все аргументы в одну строку
             args_str = " ".join(context.args)
             
-            # Парсим параметры с помощью регулярных выражений
+            # Если команда начинается с "/pay", обрабатываем
+            if args_str.startswith("pay"):
+                # Убираем "pay" из начала
+                args_str = args_str[4:].strip()
+                
+            # Разбираем параметры
             params = {}
-            pattern = r'(\w+)=([^=]+?)(?=\s+\w+=|$)'
-            matches = re.findall(pattern, args_str)
-            
-            for key, value in matches:
-                params[key.lower()] = value.strip()
+            parts = args_str.split()
+            for part in parts:
+                if '=' in part:
+                    key, value = part.split('=', 1)
+                    params[key.strip().lower()] = value.strip()
             
             # Проверяем обязательные параметры
             required = ['service', 'period', 'price']
-            for param in required:
-                if param not in params:
-                    await update.message.reply_text(
-                        f"❌ Отсутствует обязательный параметр: {param}\n\n"
-                        "Пожалуйста, укажите все необходимые параметры."
-                    )
-                    return
-            
-            # Формируем текст заказа
-            service = params.get('service', 'Неизвестный сервис')
-            plan = params.get('plan', '')
-            period = params.get('period', '')
-            price = params.get('price', 0)
-            
-            try:
-                price = int(price)
-            except ValueError:
-                await update.message.reply_text("❌ Неверный формат цены. Цена должна быть числом.")
+            if not all(param in params for param in required):
+                await update.message.reply_text(
+                    "❌ Отсутствуют обязательные параметры: service, period, price\n\n"
+                    "Пример: /pay service=ChatGPT period=1 месяц price=650"
+                )
                 return
             
-            order_text = f"🛍️ Замовлення:\n\n▫️ {service}"
+            # Формируем заказ
+            service = params['service']
+            plan = params.get('plan', '')
+            period = params['period']
+            price = params['price']
+            
+            order_text = f"🛍️ Замовлення з сайту:\n\n▫️ {service}"
             if plan:
                 order_text += f" {plan}"
             order_text += f" ({period}) - {price} UAH"
@@ -597,14 +586,11 @@ class TelegramBot:
                 'from_website': True
             }
             
-            # Сохраняем в БД
             save_active_conversation(user_id, 'order', None, order_text)
-            
-            # Обновляем статистику
             bot_statistics['total_orders'] += 1
             save_stats()
             
-            # Пересылаем заказ обоим владельцам
+            # Пересылаем заказ владельцам
             await self.forward_order_to_owners(
                 context, 
                 user_id, 
@@ -613,15 +599,19 @@ class TelegramBot:
             )
             
             await update.message.reply_text(
-                "✅ Ваше замовлення прийнято! Засновник магазину зв'яжеться з вами найближчим часом.\n\n"
-                "Ви можете продовжити з іншим запитанням або замовленням."
+                "✅ Ваше замовлення прийнято! Засновник магазину зв'яжеться з вами найближчим часом."
             )
+            return
             
         except Exception as e:
             logger.error(f"Помилка обробки команди /pay: {e}")
             await update.message.reply_text(
-                "❌ Сталася помилка при обробці вашого замовлення. Будь ласка, спробуйте ще раз."
+                "❌ Помилка обробки замовлення. Будь ласка, спробуйте ще раз або зверніться до підтримки."
             )
+            return
+
+    # Если нет аргументов - обычный запуск
+    await self.order_command(update, context)
     
     async def show_help(self, update: Update, context: ContextTypes.DEFAULT_TYPE = None):
         """Показывает справку и информацию о сервисе"""
