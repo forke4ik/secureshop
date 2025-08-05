@@ -1483,14 +1483,19 @@ class TelegramBot:
             
             await query.edit_message_text(f"✅ Вы продолжили диалог с клиентом ID: {client_id}.")
     
-    async def handle_message(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Обработчик текстовых сообщений"""
-        user = update.effective_user
-        user_id = user.id
-        
-        # Гарантируем наличие пользователя в БД
-        ensure_user_exists(user)
-        
+async def handle_message(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Обработчик текстовых сообщений"""
+    user = update.effective_user
+    user_id = user.id
+    
+    # Гарантируем наличие пользователя в БД
+    ensure_user_exists(user)
+    
+    # 🔴 КРИТИЧЕСКОЕ ИСПРАВЛЕНИЕ: сначала проверяем, является ли отправитель владельцем
+    if user_id in [OWNER_ID_1, OWNER_ID_2]:
+        await self.handle_owner_message(update, context)
+        return
+    
         # Проверяем существование диалога
         if user_id not in active_conversations:
             keyboard = [
