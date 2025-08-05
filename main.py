@@ -1888,45 +1888,72 @@ def index():
     }), 200
 
 @flask_app.route('/api/order', methods=['POST'])
-async def api_create_order():
+def api_create_order():  # Убираем async - Flask плохо работает с асинхронностью
     """API endpoint для создания заказа с сайта"""
     try:
-        data = request.json
-        logger.info(f"Получен заказ с сайта: {data}")
+        logger.info(f"Получен заказ с сайта: {request.json}")
         
+        if not request.json:
+            logger.error("❌ Пустой запрос на /api/order")
+            return jsonify({
+                'success': False,
+                'error': 'Пустий замовлення'
+            }), 400
+        
+        data = request.json
         items = data.get('items', [])
         total = data.get('total', 0)
         
         if not items:
-            return jsonify({'success': False, 'error': 'Пустий замовлення'}), 400
+            logger.error("❌ Пустой список товаров")
+            return jsonify({
+                'success': False,
+                'error': 'Пустий список товарів'
+            }), 400
         
         # Формируем текст заказа
         order_text = "🛍️ Нове замовлення з сайту:\n\n"
         for item in items:
-            order_text += f"▫️ {item.get('service', '')} {item.get('plan', '')} ({item.get('period', '')}) - {item.get('price', 0)} UAH\n"
+            service = item.get('service', 'Невідомий сервіс')
+            plan = item.get('plan', '')
+            period = item.get('period', '')
+            price = item.get('price', 0)
+            
+            order_text += f"▫️ {service}"
+            if plan:
+                order_text += f" {plan}"
+            order_text += f" ({period}) - {price} UAH\n"
+        
         order_text += f"\n💳 Всього: {total} UAH"
         
-        # Отправляем заказ обоим владельцам
+        # Синхронная отправка сообщений владельцам
         for owner_id in [OWNER_ID_1, OWNER_ID_2]:
             try:
-                await bot_instance.application.bot.send_message(
+                # Используем синхронный метод
+                bot_instance.application.bot.send_message(
                     chat_id=owner_id,
                     text=order_text
                 )
-                logger.info(f"✅ Уведомление о заказе отправлено владельцу {owner_id}")
+                logger.info(f"✅ Уведомление отправлено владельцу {owner_id}")
             except Exception as e:
-                logger.error(f"❌ Ошибка отправки заказа основателю {owner_id}: {e}")
+                logger.error(f"❌ Ошибка отправки владельцу {owner_id}: {e}")
         
         # Обновляем статистику
         bot_statistics['total_orders'] += 1
         save_stats()
         
-        return jsonify({'success': True}), 200
+        logger.info(f"✅ Заказ успешно обработан")
+        return jsonify({
+            'success': True,
+            'message': 'Замовлення успішно створено'
+        }), 200
         
     except Exception as e:
-        logger.error(f"❌ Ошибка API /api/order: {e}")
-        return jsonify({'success': False, 'error': 'Серверна помилка'}), 500
-
+        logger.error(f"❌ Критическая ошибка в /api/order: {e}", exc_info=True)
+        return jsonify({
+            'success': False,
+            'error': 'Внутрішня помилка сервера'
+        }), 500
 async def setup_webhook():
     if USE_POLLING:
         try:
