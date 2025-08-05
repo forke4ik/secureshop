@@ -15,6 +15,10 @@ from psycopg.rows import dict_row
 import io
 from flask import request, jsonify
 import json
+from flask_cors import CORS
+
+# После создания flask_app
+CORS(flask_app, resources={r"/api/*": {"origins": "*"}})
 
 @flask_app.route('/api/order', methods=['POST'])
 async def api_create_order():
