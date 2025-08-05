@@ -538,12 +538,16 @@ class TelegramBot:
         user = update.effective_user
         user_id = user.id
         
+        # Детальное логирование входящего запроса
+        logger.info(f"🔄 Получена команда /pay от {user_id} ({user.first_name})")
+        
         # Гарантируем наличие пользователя в БД
         ensure_user_exists(user)
         
         # Парсим параметры команды
         try:
             if not context.args:
+                logger.warning("❌ Отсутствуют аргументы в команде /pay")
                 await update.message.reply_text(
                     "ℹ️ Для оплаты используйте команду в формате:\n"
                     "/pay service=<название> plan=<тариф> period=<период> price=<цена>\n\n"
@@ -553,6 +557,7 @@ class TelegramBot:
             
             # Собираем все аргументы в одну строку
             args_str = " ".join(context.args)
+            logger.info(f"📦 Аргументы команды /pay: {args_str}")
             
             # Если команда пришла из deep link (начинается с "pay")
             if args_str.startswith("pay"):
@@ -560,12 +565,14 @@ class TelegramBot:
             
             # Декодируем URL-кодирование
             args_str = unquote(args_str)
+            logger.info(f"🔍 Декодированные аргументы: {args_str}")
             
             # Разбиваем на отдельные заказы
             orders = []
             if '_' in args_str:
                 # Несколько товаров в заказе
                 order_parts = args_str.split('_')
+                logger.info(f"🔍 Обнаружено {len(order_parts)} товаров в заказе")
                 for part in order_parts:
                     if 'service=' in part:
                         orders.append(part)
@@ -578,6 +585,7 @@ class TelegramBot:
             total_price = 0
             
             for order_str in orders:
+                logger.info(f"🔍 Обработка заказа: {order_str}")
                 # Парсим параметры с помощью регулярных выражений
                 params = {}
                 pattern = r'(\w+)=([^=:]+)'
@@ -590,6 +598,7 @@ class TelegramBot:
                 required = ['service', 'period', 'price']
                 for param in required:
                     if param not in params:
+                        logger.error(f"❌ Отсутствует обязательный параметр: {param}")
                         await update.message.reply_text(
                             f"❌ Отсутствует обязательный параметр: {param}\n\n"
                             "Пожалуйста, укажите все необходимые параметры."
@@ -606,6 +615,7 @@ class TelegramBot:
                     price_val = int(price)
                     total_price += price_val
                 except ValueError:
+                    logger.error(f"❌ Неверный формат цены: {price}")
                     await update.message.reply_text("❌ Неверный формат цены. Цена должна быть числом.")
                     return
                 
@@ -619,6 +629,9 @@ class TelegramBot:
             full_order_text = "🛍️ Замовлення:\n\n" + "\n".join(order_texts)
             if len(orders) > 1:
                 full_order_text += f"\n\n💳 Всього: {total_price} UAH"
+            
+            logger.info(f"✅ Успешно распарсено заказов: {len(orders)}")
+            logger.info(f"📝 Текст заказа: {full_order_text[:100]}...")
             
             # Создаем запись о заказе
             active_conversations[user_id] = {
@@ -638,6 +651,7 @@ class TelegramBot:
             save_stats()
             
             # Пересылаем заказ обоим владельцам
+            logger.info(f"📨 Пересылаем заказ владельцам")
             await self.forward_order_to_owners(
                 context, 
                 user_id, 
@@ -651,7 +665,7 @@ class TelegramBot:
             )
             
         except Exception as e:
-            logger.error(f"Помилка обробки команди /pay: {e}", exc_info=True)
+            logger.error(f"🔥 Помилка обробки команди /pay: {e}", exc_info=True)
             await update.message.reply_text(
                 "❌ Сталася помилка при обробці вашого замовлення. Будь ласка, спробуйте ще раз."
             )
@@ -1723,6 +1737,8 @@ class TelegramBot:
         ]
         reply_markup = InlineKeyboardMarkup(keyboard)
         
+        logger.info(f"📤 Пересылаем заказ владельцам: {order_text[:50]}...")
+        
         # Отправляем обоим основателям
         for owner_id in [OWNER_ID_1, OWNER_ID_2]:
             try:
@@ -1731,9 +1747,9 @@ class TelegramBot:
                     text=forward_message.strip(),
                     reply_markup=reply_markup
                 )
-                logger.info(f"✅ Уведомление о заказе отправлено владельцу {owner_id}")
+                logger.info(f"  ✅ Уведомление отправлено владельцу {owner_id}")
             except Exception as e:
-                logger.error(f"❌ Ошибка отправки заказа основателю {owner_id}: {e}")
+                logger.error(f"  ❌ Ошибка отправки владельцу {owner_id}: {e}")
     
     async def handle_owner_message(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Обработка сообщений от основателя"""
@@ -1887,6 +1903,18 @@ def health():
         'stats': bot_statistics
     }), 200
 
+@flask_app.route('/test-deeplink', methods=['GET'])
+def test_deeplink():
+    """Эндпоинт для генерации тестовой deeplink-ссылки"""
+    test_params = "pay_service=TestService:plan=TestPlan:period=1месяц:price=100"
+    test_url = f"https://t.me/{BOT_TOKEN.split(':')[0]}?start={test_params}"
+    
+    logger.info(f"🧪 Тестовая deeplink ссылка: {test_url}")
+    return jsonify({
+        "test_link": test_url,
+        "message": "Используйте эту ссылку для тестирования"
+    })
+
 @flask_app.after_request
 def add_cors_headers(response):
     """Добавляем CORS заголовки ко всем ответам"""
@@ -1933,6 +1961,8 @@ def index():
 @flask_app.route('/api/order', methods=['POST', 'OPTIONS'])
 def api_create_order():
     """API endpoint для создания заказа с сайта"""
+    logger.info("🌐 Получен запрос на /api/order")
+    
     # Обработка OPTIONS запроса для CORS
     if request.method == 'OPTIONS':
         response = jsonify({'status': 'ok'})
@@ -1942,16 +1972,16 @@ def api_create_order():
         return response
     
     try:
-        logger.info(f"Получен заказ с сайта: {request.json}")
-        
         if not request.json:
-            logger.error("❌ Пустой запрос на /api/order")
+            logger.error("❌ Пустой JSON в запросе")
             return jsonify({
                 'success': False,
                 'error': 'Пустий замовлення'
             }), 400
         
         data = request.json
+        logger.info(f"📦 Данные заказа: {json.dumps(data, ensure_ascii=False)[:500]}...")
+        
         items = data.get('items', [])
         total = data.get('total', 0)
         
@@ -1979,15 +2009,16 @@ def api_create_order():
             )
         
         # Отправляем владельцам
+        logger.info(f"📤 Отправляем уведомление владельцам")
         for owner_id in [OWNER_ID_1, OWNER_ID_2]:
             try:
                 bot_instance.application.bot.send_message(
                     chat_id=owner_id,
                     text=owner_message
                 )
-                logger.info(f"✅ Уведомление отправлено владельцу {owner_id}")
+                logger.info(f"  ✅ Уведомление отправлено владельцу {owner_id}")
             except Exception as e:
-                logger.error(f"❌ Помилка відправки власнику {owner_id}: {e}")
+                logger.error(f"  ❌ Ошибка отправки владельцу {owner_id}: {e}")
         
         # Обновляем статистику
         bot_statistics['total_orders'] += 1
@@ -2002,7 +2033,7 @@ def api_create_order():
         return response, 200
         
     except Exception as e:
-        logger.error(f"❌ Критическая ошибка в /api/order: {e}", exc_info=True)
+        logger.error(f"🔥 Критическая ошибка в /api/order: {e}", exc_info=True)
         response = jsonify({
             'success': False,
             'error': 'Внутрішня помилка сервера'
