@@ -10,48 +10,10 @@ from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, User, B
 from telegram.ext import Application, CommandHandler, MessageHandler, CallbackQueryHandler, filters, ContextTypes
 from telegram.error import Conflict
 from flask import Flask, request, jsonify
+from flask_cors import CORS
 import psycopg
 from psycopg.rows import dict_row
 import io
-from flask import request, jsonify
-import json
-from flask_cors import CORS
-
-# После создания flask_app
-CORS(flask_app, resources={r"/api/*": {"origins": "*"}})
-
-@flask_app.route('/api/order', methods=['POST'])
-async def api_create_order():
-    try:
-        data = request.json
-        items = data.get('items', [])
-        total = data.get('total', 0)
-        
-        if not items:
-            return jsonify({'success': False, 'error': 'Пустий замовлення'}), 400
-        
-        # Формируем текст заказа
-        order_text = "🛍️ Нове замовлення з сайту:\n\n"
-        for item in items:
-            order_text += f"▫️ {item.get('service', '')} {item.get('plan', '')} ({item.get('period', '')}) - {item.get('price', 0)} UAH\n"
-        order_text += f"\n💳 Всього: {total} UAH"
-        
-        # Здесь должен быть механизм привязки к пользователю
-        # Пока будем отправлять обоим владельцам
-        for owner_id in [OWNER_ID_1, OWNER_ID_2]:
-            try:
-                await telegram_app.application.bot.send_message(
-                    chat_id=owner_id,
-                    text=order_text
-                )
-            except Exception as e:
-                logger.error(f"Помилка відправки замовлення власнику {owner_id}: {e}")
-        
-        return jsonify({'success': True}), 200
-        
-    except Exception as e:
-        logger.error(f"Помилка API /api/order: {e}")
-        return jsonify({'success': False, 'error': 'Серверна помилка'}), 500
 
 # Настройка логирования
 logging.basicConfig(
@@ -396,6 +358,7 @@ owner_client_map = {}
 # Глобальные переменные для приложения
 telegram_app = None
 flask_app = Flask(__name__)
+CORS(flask_app, resources={r"/api/*": {"origins": "*"}})  # Включаем CORS для API
 bot_running = False
 bot_lock = threading.Lock()  # Блокировка для управления доступом к боту
 
@@ -517,7 +480,7 @@ class TelegramBot:
         # Гарантируем наличие пользователя в БД
         ensure_user_exists(user)
         
-        # ПРОВЕРКА: Если команда /start была вызвана с параметрами (с сайта)
+        # ПРОВЕРКА: Если команда /start была вызвана с параметрами (с сайту)
         if context.args:
             # Склеиваем аргументы в одну строку
             args_str = " ".join(context.args)
@@ -1923,6 +1886,46 @@ def index():
         'bot_running': bot_running,
         'stats': bot_statistics
     }), 200
+
+@flask_app.route('/api/order', methods=['POST'])
+async def api_create_order():
+    """API endpoint для создания заказа с сайта"""
+    try:
+        data = request.json
+        logger.info(f"Получен заказ с сайта: {data}")
+        
+        items = data.get('items', [])
+        total = data.get('total', 0)
+        
+        if not items:
+            return jsonify({'success': False, 'error': 'Пустий замовлення'}), 400
+        
+        # Формируем текст заказа
+        order_text = "🛍️ Нове замовлення з сайту:\n\n"
+        for item in items:
+            order_text += f"▫️ {item.get('service', '')} {item.get('plan', '')} ({item.get('period', '')}) - {item.get('price', 0)} UAH\n"
+        order_text += f"\n💳 Всього: {total} UAH"
+        
+        # Отправляем заказ обоим владельцам
+        for owner_id in [OWNER_ID_1, OWNER_ID_2]:
+            try:
+                await bot_instance.application.bot.send_message(
+                    chat_id=owner_id,
+                    text=order_text
+                )
+                logger.info(f"✅ Уведомление о заказе отправлено владельцу {owner_id}")
+            except Exception as e:
+                logger.error(f"❌ Ошибка отправки заказа основателю {owner_id}: {e}")
+        
+        # Обновляем статистику
+        bot_statistics['total_orders'] += 1
+        save_stats()
+        
+        return jsonify({'success': True}), 200
+        
+    except Exception as e:
+        logger.error(f"❌ Ошибка API /api/order: {e}")
+        return jsonify({'success': False, 'error': 'Серверна помилка'}), 500
 
 async def setup_webhook():
     if USE_POLLING:
