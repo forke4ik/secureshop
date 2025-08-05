@@ -13,6 +13,41 @@ from flask import Flask, request, jsonify
 import psycopg
 from psycopg.rows import dict_row
 import io
+from flask import request, jsonify
+import json
+
+@flask_app.route('/api/order', methods=['POST'])
+async def api_create_order():
+    try:
+        data = request.json
+        items = data.get('items', [])
+        total = data.get('total', 0)
+        
+        if not items:
+            return jsonify({'success': False, 'error': 'Пустий замовлення'}), 400
+        
+        # Формируем текст заказа
+        order_text = "🛍️ Нове замовлення з сайту:\n\n"
+        for item in items:
+            order_text += f"▫️ {item.get('service', '')} {item.get('plan', '')} ({item.get('period', '')}) - {item.get('price', 0)} UAH\n"
+        order_text += f"\n💳 Всього: {total} UAH"
+        
+        # Здесь должен быть механизм привязки к пользователю
+        # Пока будем отправлять обоим владельцам
+        for owner_id in [OWNER_ID_1, OWNER_ID_2]:
+            try:
+                await telegram_app.application.bot.send_message(
+                    chat_id=owner_id,
+                    text=order_text
+                )
+            except Exception as e:
+                logger.error(f"Помилка відправки замовлення власнику {owner_id}: {e}")
+        
+        return jsonify({'success': True}), 200
+        
+    except Exception as e:
+        logger.error(f"Помилка API /api/order: {e}")
+        return jsonify({'success': False, 'error': 'Серверна помилка'}), 500
 
 # Настройка логирования
 logging.basicConfig(
