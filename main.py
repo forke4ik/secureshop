@@ -4,7 +4,7 @@ import asyncio
 import threading
 import time
 import json
-import re  # Добавлено для парсинга параметров
+import re
 from datetime import datetime
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, User, BotCommandScopeChat
 from telegram.ext import Application, CommandHandler, MessageHandler, CallbackQueryHandler, filters, ContextTypes
@@ -376,7 +376,7 @@ class TelegramBot:
             ("help", "Допомога та інформація"),
             ("order", "Зробити замовлення"),
             ("question", "Поставити запитання"),
-            ("pay", "Оплатити замовлення"),  # Новая команда
+            ("pay", "Оплатити замовлення"),
             ("channel", "Наш головний канал"),
             ("stop", "Завершити поточний діалог")
         ]
@@ -405,7 +405,7 @@ class TelegramBot:
     def setup_handlers(self):
         """Настройка обработчиков команд и сообщений"""
         self.application.add_handler(CommandHandler("start", self.start))
-        self.application.add_handler(CommandHandler("pay", self.pay_command))  # Новый обработчик
+        self.application.add_handler(CommandHandler("pay", self.pay_command))
         self.application.add_handler(CommandHandler("stop", self.stop_conversation))
         self.application.add_handler(CommandHandler("stats", self.show_stats))
         self.application.add_handler(CommandHandler("help", self.show_help))
@@ -433,7 +433,7 @@ class TelegramBot:
     async def start_polling(self):
         """Запуск polling режима"""
         try:
-            if self.application.updater and self.application.updater.running:
+            if self.application.updater.running:
                 logger.warning("🛑 Бот уже запущен! Пропускаем повторный запуск")
                 return
             
@@ -471,62 +471,62 @@ class TelegramBot:
         except Exception as e:
             logger.error(f"❌ Ошибка остановки polling: {e}")
     
-async def start(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Обработчик команды /start с поддержкой deep linking с сайта"""
-    user = update.effective_user
-    
-    # Гарантируем наличие пользователя в БД
-    ensure_user_exists(user)
-    
-    # ПРОВЕРКА: Если команда /start была вызвана с параметрами (с сайта)
-    if context.args:
-        # Склеиваем аргументы в одну строку
-        args_str = " ".join(context.args)
+    async def start(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Обработчик команды /start с поддержкой deep linking с сайта"""
+        user = update.effective_user
         
-        # Если команда начинается с "/pay", обрабатываем её
-        if args_str.startswith("/pay"):
-            # Имитируем вызов команды /pay
-            context.args = args_str.split()[1:]  # Убираем "/pay"
-            await self.pay_command(update, context)
+        # Гарантируем наличие пользователя в БД
+        ensure_user_exists(user)
+        
+        # ПРОВЕРКА: Если команда /start была вызвана с параметрами (с сайта)
+        if context.args:
+            # Склеиваем аргументы в одну строку
+            args_str = " ".join(context.args)
+            
+            # Если команда начинается с "/pay", обрабатываем её
+            if args_str.startswith("/pay"):
+                # Имитируем вызов команды /pay
+                context.args = args_str.split()[1:]  # Убираем "/pay"
+                await self.pay_command(update, context)
+                return
+            
+            logger.info(f"Получены параметры deep link от {user.id}: {args_str}")
+        
+        # ---- Обычный запуск /start без параметров ----
+        
+        # Обновляем статистику
+        if user.id not in bot_statistics['active_users']:
+            bot_statistics['total_users'] += 1
+            bot_statistics['active_users'].append(user.id)
+            save_stats()
+        
+        # Для основателей
+        if user.id in [OWNER_ID_1, OWNER_ID_2]:
+            owner_name = "@HiGki2pYYY" if user.id == OWNER_ID_1 else "@oc33t"
+            await update.message.reply_text(
+                f"Добро пожаловать, {user.first_name}! ({owner_name})\n"
+                f"Вы вошли как основатель магазина."
+            )
             return
         
-        logger.info(f"Получены параметры deep link от {user.id}: {args_str}")
-    
-    # ---- Обычный запуск /start без параметров ----
-    
-    # Обновляем статистику
-    if user.id not in bot_statistics['active_users']:
-        bot_statistics['total_users'] += 1
-        bot_statistics['active_users'].append(user.id)
-        save_stats()
-    
-    # Для основателей
-    if user.id in [OWNER_ID_1, OWNER_ID_2]:
-        owner_name = "@HiGki2pYYY" if user.id == OWNER_ID_1 else "@oc33t"
-        await update.message.reply_text(
-            f"Добро пожаловать, {user.first_name}! ({owner_name})\n"
-            f"Вы вошли как основатель магазина."
-        )
-        return
-    
-    # Главное меню для обычных пользователей
-    keyboard = [
-        [InlineKeyboardButton("🛒 Зробити замовлення", callback_data='order')],
-        [InlineKeyboardButton("❓ Поставити запитання", callback_data='question')],
-        [InlineKeyboardButton("ℹ️ Допомога", callback_data='help')]
-    ]
-    reply_markup = InlineKeyboardMarkup(keyboard)
+        # Главное меню для обычных пользователей
+        keyboard = [
+            [InlineKeyboardButton("🛒 Зробити замовлення", callback_data='order')],
+            [InlineKeyboardButton("❓ Поставити запитання", callback_data='question')],
+            [InlineKeyboardButton("ℹ️ Допомога", callback_data='help')]
+        ]
+        reply_markup = InlineKeyboardMarkup(keyboard)
 
-    welcome_message = f"""
+        welcome_message = f"""
 Ласкаво просимо, {user.first_name}! 👋
 
 Я бот-помічник нашого магазину. Будь ласка, оберіть, що вас цікавить:
-    """
-    
-    await update.message.reply_text(
-        welcome_message.strip(),
-        reply_markup=reply_markup
-    )
+        """
+        
+        await update.message.reply_text(
+            welcome_message.strip(),
+            reply_markup=reply_markup
+        )
     
     async def pay_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Обработчик команды /pay для создания заказа"""
@@ -1116,7 +1116,8 @@ async def start(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
             ]
             await query.edit_message_text(
                 "💬 Оберіть варіант ChatGPT Plus:",
-                reply_markup=InlineKeyboardMarkup(keyboard))
+                reply_markup=InlineKeyboardMarkup(keyboard)
+            )
         
         # Меню Discord
         elif query.data == 'category_discord':
@@ -1127,7 +1128,8 @@ async def start(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
             ]
             await query.edit_message_text(
                 "🎮 Оберіть тип Discord Nitro:",
-                reply_markup=InlineKeyboardMarkup(keyboard))
+                reply_markup=InlineKeyboardMarkup(keyboard)
+            )
         
         # Подменю Discord Basic
         elif query.data == 'discord_basic':
@@ -1138,7 +1140,8 @@ async def start(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
             ]
             await query.edit_message_text(
                 "🔹 Discord Nitro Basic:",
-                reply_markup=InlineKeyboardMarkup(keyboard))
+                reply_markup=InlineKeyboardMarkup(keyboard)
+            )
         
         # Подменю Discord Full
         elif query.data == 'discord_full':
@@ -1149,7 +1152,8 @@ async def start(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
             ]
             await query.edit_message_text(
                 "✨ Discord Nitro Full:",
-                reply_markup=InlineKeyboardMarkup(keyboard))
+                reply_markup=InlineKeyboardMarkup(keyboard)
+            )
         
         # Меню Duolingo
         elif query.data == 'category_duolingo':
@@ -1160,7 +1164,8 @@ async def start(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
             ]
             await query.edit_message_text(
                 "📚 Оберіть тип підписки Duolingo:",
-                reply_markup=InlineKeyboardMarkup(keyboard))
+                reply_markup=InlineKeyboardMarkup(keyboard)
+            )
         
         # Подменю Duolingo Family
         elif query.data == 'duolingo_family':
@@ -1170,7 +1175,8 @@ async def start(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
             ]
             await query.edit_message_text(
                 "👨‍👩‍👧‍👦 Duolingo Family:",
-                reply_markup=InlineKeyboardMarkup(keyboard))
+                reply_markup=InlineKeyboardMarkup(keyboard)
+            )
         
         # Подменю Duolingo Individual
         elif query.data == 'duolingo_individual':
@@ -1181,7 +1187,8 @@ async def start(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
             ]
             await query.edit_message_text(
                 "👤 Duolingo Individual:",
-                reply_markup=InlineKeyboardMarkup(keyboard))
+                reply_markup=InlineKeyboardMarkup(keyboard)
+            )
         
         # Меню PicsArt
         elif query.data == 'category_picsart':
@@ -1192,7 +1199,8 @@ async def start(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
             ]
             await query.edit_message_text(
                 "📸 Оберіть версію PicsArt:",
-                reply_markup=InlineKeyboardMarkup(keyboard))
+                reply_markup=InlineKeyboardMarkup(keyboard)
+            )
         
         # Подменю PicsArt Plus
         elif query.data == 'picsart_plus':
@@ -1203,7 +1211,8 @@ async def start(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
             ]
             await query.edit_message_text(
                 "✨ PicsArt Plus:",
-                reply_markup=InlineKeyboardMarkup(keyboard))
+                reply_markup=InlineKeyboardMarkup(keyboard)
+            )
         
         # Подменю PicsArt Pro
         elif query.data == 'picsart_pro':
@@ -1214,7 +1223,8 @@ async def start(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
             ]
             await query.edit_message_text(
                 "🚀 PicsArt Pro:",
-                reply_markup=InlineKeyboardMarkup(keyboard))
+                reply_markup=InlineKeyboardMarkup(keyboard)
+            )
         
         # Обработка выбора товара
         elif query.data in [
@@ -1787,7 +1797,6 @@ async def start(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
             'duolingo_ind_1': {'name': "Duolingo Individual (1 місяць)", 'price': 200},
             'duolingo_ind_12': {'name': "Duolingo Individual (12 місяців)", 'price': 1500},
             'duolingo_fam_12': {'name': "Duolingo Family (12 місяців)", 'price': 380},
-            # Новые товары PicsArt
             'picsart_plus_1': {'name': "PicsArt Plus (1 місяць)", 'price': 130},
             'picsart_plus_12': {'name': "PicsArt Plus (12 місяців)", 'price': 800},
             'picsart_pro_1': {'name': "PicsArt Pro (1 місяць)", 'price': 180},
@@ -1806,7 +1815,6 @@ async def start(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
             'duolingo_ind_1': 'duolingo_individual',
             'duolingo_ind_12': 'duolingo_individual',
             'duolingo_fam_12': 'duolingo_family',
-            # Новые товары PicsArt
             'picsart_plus_1': 'picsart_plus',
             'picsart_plus_12': 'picsart_plus',
             'picsart_pro_1': 'picsart_pro',
