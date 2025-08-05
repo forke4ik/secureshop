@@ -1852,6 +1852,14 @@ def health():
         'stats': bot_statistics
     }), 200
 
+@flask_app.after_request
+def add_cors_headers(response):
+    """Добавляем CORS заголовки ко всем ответам"""
+    response.headers['Access-Control-Allow-Origin'] = '*'
+    response.headers['Access-Control-Allow-Headers'] = 'Content-Type, Authorization'
+    response.headers['Access-Control-Allow-Methods'] = 'GET, POST, PUT, DELETE, OPTIONS'
+    return response
+
 @flask_app.route(f'/{BOT_TOKEN}', methods=['POST'])
 def webhook():
     if USE_POLLING:
