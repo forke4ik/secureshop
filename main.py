@@ -358,9 +358,7 @@ owner_client_map = {}
 # Глобальные переменные для приложения
 telegram_app = None
 flask_app = Flask(__name__)
-CORS(flask_app, resources={r"/api/*": {"origins": "*"}})  # Включаем CORS для API
-bot_running = False
-bot_lock = threading.Lock()  # Блокировка для управления доступом к боту
+CORS(flask_app)  # Разрешаем CORS для всех доменов)  # Блокировка для управления доступом к боту
 
 class TelegramBot:
     def __init__(self):
