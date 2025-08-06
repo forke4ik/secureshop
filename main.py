@@ -9,12 +9,13 @@ from datetime import datetime
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, User, BotCommandScopeChat
 from telegram.ext import Application, CommandHandler, MessageHandler, CallbackQueryHandler, filters, ContextTypes
 from telegram.error import Conflict
-from flask import Flask, request, jsonify
+from flask import Flask, request, jsonify, make_response
 from flask_cors import CORS
 import psycopg
 from psycopg.rows import dict_row
 import io
 from urllib.parse import unquote
+import traceback
 
 # Настройка логирования
 logging.basicConfig(
@@ -922,7 +923,7 @@ class TelegramBot:
             )
             
             # Удаляем из базы данных
-            delete_active_conversation(user_id)
+            delete_active_conversation(user_id);
             return
 
         # Если нет активного диалога
@@ -2002,6 +2003,15 @@ class TelegramBot:
 
 bot_instance = TelegramBot()
 
+@flask_app.after_request
+def add_cors_headers(response):
+    """Добавляем CORS заголовки ко всем ответам"""
+    response.headers['Access-Control-Allow-Origin'] = '*'
+    response.headers['Access-Control-Allow-Headers'] = 'Content-Type, Authorization, X-CSRF-Token'
+    response.headers['Access-Control-Allow-Methods'] = 'GET, POST, PUT, DELETE, OPTIONS'
+    response.headers['Access-Control-Allow-Credentials'] = 'true'
+    return response
+
 @flask_app.route('/ping', methods=['GET'])
 def ping():
     return jsonify({
@@ -2039,14 +2049,6 @@ def test_deeplink():
         "test_link": test_url,
         "message": "Используйте эту ссылку для тестирования"
     })
-
-@flask_app.after_request
-def add_cors_headers(response):
-    """Добавляем CORS заголовки ко всем ответам"""
-    response.headers['Access-Control-Allow-Origin'] = '*'
-    response.headers['Access-Control-Allow-Headers'] = 'Content-Type, Authorization'
-    response.headers['Access-Control-Allow-Methods'] = 'GET, POST, PUT, DELETE, OPTIONS'
-    return response
 
 @flask_app.route(f'/{BOT_TOKEN}', methods=['POST'])
 def webhook():
@@ -2090,17 +2092,43 @@ def create_order():
     
     # Обработка OPTIONS для CORS
     if request.method == 'OPTIONS':
-        return jsonify({'status': 'ok'}), 200
+        response = make_response()
+        response.headers['Access-Control-Allow-Origin'] = '*'
+        response.headers['Access-Control-Allow-Headers'] = 'Content-Type, Authorization, X-CSRF-Token'
+        response.headers['Access-Control-Allow-Methods'] = 'GET, POST, PUT, DELETE, OPTIONS'
+        return response, 200
     
     try:
+        # Получаем CSRF-токен из заголовка
+        csrf_token = request.headers.get('X-CSRF-Token')
+        if not csrf_token:
+            logger.warning("❌ Отсутствует CSRF-токен в заголовке запроса")
+            return jsonify({'success': False, 'error': 'CSRF token missing'}), 403
+        
         data = request.json
-        if not data or 'items' not in data or 'total' not in data:
-            logger.error("❌ Неверные данные заказа")
-            return jsonify({'success': False, 'error': 'Invalid order data'}), 400
+        if not data:
+            logger.error("❌ Пустой запрос")
+            return jsonify({'success': False, 'error': 'Empty request'}), 400
+            
+        # Проверяем обязательные поля
+        required_fields = ['items', 'total']
+        for field in required_fields:
+            if field not in data:
+                logger.error(f"❌ Отсутствует обязательное поле: {field}")
+                return jsonify({'success': False, 'error': f'Missing field: {field}'}), 400
         
         items = data['items']
         total = data['total']
-        user_id = data.get('user_id')  # Необязательное поле
+        user_id = data.get('user_id')
+
+        # Валидация данных
+        if not isinstance(items, list) or len(items) == 0:
+            logger.error("❌ Неверный формат товаров")
+            return jsonify({'success': False, 'error': 'Invalid items format'}), 400
+            
+        if not isinstance(total, (int, float)) or total <= 0:
+            logger.error("❌ Неверная сумма заказа")
+            return jsonify({'success': False, 'error': 'Invalid total amount'}), 400
         
         # Сохраняем заказ в базу данных
         with psycopg.connect(DATABASE_URL) as conn:
@@ -2120,6 +2148,7 @@ def create_order():
         
     except Exception as e:
         logger.error(f"❌ Ошибка создания заказа: {e}")
+        logger.error(traceback.format_exc())
         return jsonify({'success': False, 'error': str(e)}), 500
 
 @flask_app.route('/api/order/<int:order_id>', methods=['GET'])
