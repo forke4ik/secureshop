@@ -16,6 +16,7 @@ from psycopg.rows import dict_row
 import io
 from urllib.parse import unquote
 import traceback
+import requests  # Для скачивания файлов
 
 # Настройка логирования
 logging.basicConfig(
@@ -187,22 +188,9 @@ def init_db():
                     );
                 """)
                 
-                # Таблица заказов
-                cur.execute("""
-                    CREATE TABLE IF NOT EXISTS orders (
-                        id SERIAL PRIMARY KEY,
-                        user_id BIGINT,
-                        items JSONB NOT NULL,
-                        total_price INTEGER NOT NULL,
-                        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                        status VARCHAR(20) DEFAULT 'pending'
-                    );
-                """)
-                
                 # Индексы для оптимизации
                 cur.execute("CREATE INDEX IF NOT EXISTS idx_messages_user_id ON messages(user_id);")
                 cur.execute("CREATE INDEX IF NOT EXISTS idx_messages_created_at ON messages(created_at);")
-                cur.execute("CREATE INDEX IF NOT EXISTS idx_orders_created_at ON orders(created_at);")
                 
         logger.info("✅ База данных инициализирована")
     except Exception as e:
@@ -332,17 +320,6 @@ def get_total_users_count():
         logger.error(f"❌ Ошибка получения количества пользователей: {e}")
         return 0
 
-def get_order(order_id):
-    """Возвращает заказ по ID"""
-    try:
-        with psycopg.connect(DATABASE_URL) as conn:
-            with conn.cursor(row_factory=dict_row) as cur:
-                cur.execute("SELECT * FROM orders WHERE id = %s", (order_id,))
-                return cur.fetchone()
-    except Exception as e:
-        logger.error(f"❌ Ошибка получения заказа: {e}")
-        return None
-
 # Инициализируем базу данных при старте
 init_db()
 
@@ -406,7 +383,6 @@ class TelegramBot:
             ("help", "Допомога та інформація"),
             ("order", "Зробити замовлення"),
             ("question", "Поставити запитання"),
-            ("pay", "Оплатити замовлення"),
             ("channel", "Наш головний канал"),
             ("stop", "Завершити поточний діалог")
         ]
@@ -416,8 +392,7 @@ class TelegramBot:
             ("stats", "Статистика бота"),
             ("chats", "Активні чати"),
             ("history", "Історія переписки"),
-            ("dialog", "Почати діалог з користувачем"),
-            ("orders", "Активні замовлення")
+            ("dialog", "Почати діалог з користувачем")
         ]
         
         try:
@@ -436,7 +411,6 @@ class TelegramBot:
     def setup_handlers(self):
         """Настройка обработчиков команд и сообщений"""
         self.application.add_handler(CommandHandler("start", self.start))
-        self.application.add_handler(CommandHandler("pay", self.pay_command))
         self.application.add_handler(CommandHandler("stop", self.stop_conversation))
         self.application.add_handler(CommandHandler("stats", self.show_stats))
         self.application.add_handler(CommandHandler("help", self.show_help))
@@ -446,9 +420,10 @@ class TelegramBot:
         self.application.add_handler(CommandHandler("chats", self.show_active_chats))
         self.application.add_handler(CommandHandler("history", self.show_conversation_history))
         self.application.add_handler(CommandHandler("dialog", self.start_dialog_command))
-        self.application.add_handler(CommandHandler("orders", self.show_active_orders))
         self.application.add_handler(CallbackQueryHandler(self.button_handler))
         self.application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, self.handle_message))
+        # Добавляем обработчик документов (JSON-файлов)
+        self.application.add_handler(MessageHandler(filters.Document.ALL, self.handle_document))
         self.application.add_error_handler(self.error_handler)
     
     async def initialize(self):
@@ -504,40 +479,11 @@ class TelegramBot:
             logger.error(f"❌ Ошибка остановки polling: {e}")
     
     async def start(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Обработчик команды /start с поддержкой deep linking с сайта"""
+        """Обработчик команды /start"""
         user = update.effective_user
         
         # Гарантируем наличие пользователя в БД
         ensure_user_exists(user)
-        
-        # ПРОВЕРКА: Если команда /start была вызвана с параметрами (с сайту)
-        if context.args:
-            # Склеиваем аргументы в одну строку
-            args_str = " ".join(context.args)
-            
-            # Обработка заказа по ID
-            if args_str.startswith("order_id="):
-                order_id = args_str.split('=')[1]
-                logger.info(f"🔄 Получен запрос на обработку заказа ID: {order_id}")
-                await self.process_order(update, context, user, order_id)
-                return
-            
-            # Если команда начинается с "pay", обрабатываем её (старая версия)
-            if args_str.startswith("pay"):
-                # Имитируем вызов команды /pay
-                context.args = [args_str]
-                await self.pay_command(update, context)
-                return
-            
-            logger.info(f"Получены параметры deep link от {user.id}: {args_str}")
-        
-        # ---- Обычный запуск /start без параметров ----
-        
-        # Обновляем статистику
-        if user.id not in bot_statistics['active_users']:
-            bot_statistics['total_users'] += 1
-            bot_statistics['active_users'].append(user.id)
-            save_stats()
         
         # Для основателей
         if user.id in [OWNER_ID_1, OWNER_ID_2]:
@@ -567,194 +513,75 @@ class TelegramBot:
             reply_markup=reply_markup
         )
     
-    async def process_order(self, update: Update, context: ContextTypes.DEFAULT_TYPE, user, order_id):
-        """Обработка заказа по ID из базы данных"""
-        logger.info(f"🔄 Обработка заказа по ID: {order_id} от пользователя {user.id}")
-        
-        try:
-            # Получаем заказ из базы
-            order = get_order(order_id)
-            
-            if not order:
-                logger.error(f"❌ Заказ не найден: {order_id}")
-                await update.message.reply_text("❌ Замовлення не знайдено. Будь ласка, зверніться до підтримки.")
-                return
-            
-            # Проверяем статус заказа
-            if order['status'] != 'pending':
-                logger.warning(f"⚠️ Заказ уже обработан: статус {order['status']}")
-                await update.message.reply_text("ℹ️ Це замовлення вже оброблено.")
-                return
-            
-            # Формируем текст заказа
-            items = order['items']
-            order_text = "🛍️ Замовлення з сайту:\n\n"
-            for item in items:
-                order_text += f"▫️ {item['service']} {item.get('plan', '')} ({item['period']}) - {item['price']} UAH\n"
-            order_text += f"\n💳 Всього: {order['total_price']} UAH"
-            
-            # Создаем запись о заказе
-            active_conversations[user.id] = {
-                'type': 'order',
-                'user_info': user,
-                'assigned_owner': None,
-                'order_details': order_text,
-                'last_message': order_text,
-                'from_website': True
-            }
-            
-            # Сохраняем в БД
-            save_active_conversation(user.id, 'order', None, order_text)
-            
-            # Обновляем статистику
-            bot_statistics['total_orders'] += 1
-            save_stats()
-            
-            # Пересылаем заказ обоим владельцам
-            await self.forward_order_to_owners(
-                context, 
-                user.id, 
-                user, 
-                order_text
-            )
-            
-            await update.message.reply_text(
-                "✅ Ваше замовлення прийнято! Засновник магазину зв'яжеться з вами найближчим часом.\n\n"
-                "Ви можете продовжити з іншим запитанням або замовленням."
-            )
-            
-        except Exception as e:
-            logger.error(f"🔥 Помилка обробки замовлення: {e}", exc_info=True)
-            await update.message.reply_text(
-                "❌ Сталася помилка при обробці вашого замовлення. Будь ласка, спробуйте ще раз."
-            )
-    
-    async def pay_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Обработчик команды /pay для создания заказа (старая версия)"""
+    async def handle_document(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Обработчик загрузки JSON-файлов с заказами"""
         user = update.effective_user
-        user_id = user.id
+        document = update.message.document
         
-        # Гарантируем наличие пользователя в БД
-        ensure_user_exists(user)
+        # Проверяем тип файла
+        if document.mime_type != 'application/json':
+            await update.message.reply_text("ℹ️ Будь ласка, надішліть файл у форматі JSON.")
+            return
         
-        # Парсим параметры команды
+        # Скачиваем файл
+        file = await context.bot.get_file(document.file_id)
+        file_path = file.file_path
+        
+        # Скачиваем содержимое
+        url = f"https://api.telegram.org/file/bot{BOT_TOKEN}/{file_path}"
+        response = requests.get(url)
+        if response.status_code != 200:
+            logger.error(f"Не вдалося завантажити файл: {response.status_code}")
+            await update.message.reply_text("❌ Не вдалося обробити файл. Спробуйте ще раз.")
+            return
+        
         try:
-            if not context.args:
-                logger.warning("❌ Отсутствуют аргументы в команде /pay")
-                await update.message.reply_text(
-                    "ℹ️ Для оплаты используйте команду в формате:\n"
-                    "/pay service=<название> plan=<тариф> period=<период> price=<цена>\n\n"
-                    "Например: /pay service=ChatGPT plan=Plus period=1 месяц price=650"
-                )
-                return
-            
-            # Собираем все аргументы в одну строку
-            args_str = " ".join(context.args)
-            
-            # Если команда пришла из deep link (начинается с "pay")
-            if args_str.startswith("pay"):
-                args_str = args_str[3:].strip()
-            
-            # Декодируем URL-кодирование
-            args_str = unquote(args_str)
-            
-            # Разбиваем на отдельные заказы
-            orders = []
-            if '_' in args_str:
-                # Несколько товаров в заказе
-                order_parts = args_str.split('_')
-                for part in order_parts:
-                    if 'service=' in part:
-                        orders.append(part)
-            else:
-                # Один товар в заказе
-                orders.append(args_str)
-            
-            # Обрабатываем каждый заказ
-            order_texts = []
-            total_price = 0
-            
-            for order_str in orders:
-                # Парсим параметры с помощью регулярных выражений
-                params = {}
-                pattern = r'(\w+)=([^=:]+)'
-                matches = re.findall(pattern, order_str)
-                
-                for key, value in matches:
-                    params[key.lower()] = value.strip()
-                
-                # Проверяем обязательные параметры
-                required = ['service', 'period', 'price']
-                for param in required:
-                    if param not in params:
-                        logger.error(f"❌ Отсутствует обязательный параметр: {param}")
-                        await update.message.reply_text(
-                            f"❌ Отсутствует обязательный параметр: {param}\n\n"
-                            "Пожалуйста, укажите все необходимые параметры."
-                        )
-                        return
-                
-                # Формируем текст заказа
-                service = params.get('service', 'Неизвестный сервис')
-                plan = params.get('plan', '')
-                period = params.get('period', '')
-                price = params.get('price', 0)
-                
-                try:
-                    price_val = int(price)
-                    total_price += price_val
-                except ValueError:
-                    logger.error(f"❌ Неверный формат цены: {price}")
-                    await update.message.reply_text("❌ Неверный формат цены. Цена должна быть числом.")
-                    return
-                
-                order_text = f"▫️ {service}"
-                if plan:
-                    order_text += f" {plan}"
-                order_text += f" ({period}) - {price} UAH"
-                order_texts.append(order_text)
-            
-            # Формируем полный текст заказа
-            full_order_text = "🛍️ Замовлення:\n\n" + "\n".join(order_texts)
-            if len(orders) > 1:
-                full_order_text += f"\n\n💳 Всього: {total_price} UAH"
-            
-            # Создаем запись о заказе
-            active_conversations[user_id] = {
-                'type': 'order',
-                'user_info': user,
-                'assigned_owner': None,
-                'order_details': full_order_text,
-                'last_message': full_order_text,
-                'from_website': True
-            }
-            
-            # Сохраняем в БД
-            save_active_conversation(user_id, 'order', None, full_order_text)
-            
-            # Обновляем статистику
-            bot_statistics['total_orders'] += len(orders)
-            save_stats()
-            
-            # Пересылаем заказ обоим владельцам
-            logger.info(f"📨 Пересылаем заказ владельцам: {full_order_text[:100]}...")
-            await self.forward_order_to_owners(
-                context, 
-                user_id, 
-                user, 
-                full_order_text
-            )
-            
-            await update.message.reply_text(
-                "✅ Ваше замовлення прийнято! Засновник магазину зв'яжеться з вами найближчим часом.\n\n"
-                "Ви можете продовжити з іншим запитанням або замовленням."
-            )
-            
+            order_data = response.json()
         except Exception as e:
-            logger.error(f"🔥 Помилка обробки команди /pay: {e}", exc_info=True)
-            await update.message.reply_text(
-                "❌ Сталася помилка при обробці вашого замовлення. Будь ласка, спробуйте ще раз."
-            )
+            logger.error(f"Помилка парсингу JSON: {e}")
+            await update.message.reply_text("❌ Файл має неправильний формат JSON.")
+            return
+        
+        # Проверяем структуру заказа
+        if 'items' not in order_data or 'total' not in order_data:
+            await update.message.reply_text("❌ У файлі відсутні обов'язкові поля (items, total).")
+            return
+        
+        # Формируем текст заказа
+        order_text = "🛍️ Замовлення з сайту (з файлу):\n\n"
+        for item in order_data['items']:
+            order_text += f"▫️ {item['service']} {item.get('plan', '')} ({item['period']}) - {item['price']} UAH\n"
+        order_text += f"\n💳 Всього: {order_data['total']} UAH"
+        
+        # Создаем запись о заказе
+        user_id = user.id
+        active_conversations[user_id] = {
+            'type': 'order',
+            'user_info': user,
+            'assigned_owner': None,
+            'order_details': order_text,
+            'last_message': order_text,
+            'from_website': True
+        }
+        
+        save_active_conversation(user_id, 'order', None, order_text)
+        
+        # Обновляем статистику
+        bot_statistics['total_orders'] += len(order_data['items'])
+        save_stats()
+        
+        # Пересылаем заказ обоим владельцам
+        await self.forward_order_to_owners(
+            context, 
+            user_id, 
+            user, 
+            order_text
+        )
+        
+        await update.message.reply_text(
+            "✅ Ваше замовлення прийнято! Засновник магазину зв'яжеться з вами найближчим часом.\n\n"
+            "Ви можете продовжити з іншим запитанням або замовленням."
+        )
     
     async def show_help(self, update: Update, context: ContextTypes.DEFAULT_TYPE = None):
         """Показывает справку и информацию о сервисе"""
@@ -772,7 +599,6 @@ class TelegramBot:
 📌 Список доступних команд:
 /start - Головне меню
 /order - Зробити замовлення
-/pay - Оплатити замовлення (для покупок з сайту)
 /question - Поставити запитання
 /channel - Наш канал з асортиментом, оновленнями та розіграшами
 /stop - Завершити поточний діалог
@@ -1204,46 +1030,6 @@ class TelegramBot:
             "Для завершения диалога используйте /stop."
         )
     
-    async def show_active_orders(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Показывает активные заказы для основателей"""
-        owner_id = update.effective_user.id
-        
-        if owner_id not in [OWNER_ID_1, OWNER_ID_2]:
-            return
-            
-        try:
-            with psycopg.connect(DATABASE_URL) as conn:
-                with conn.cursor(row_factory=dict_row) as cur:
-                    cur.execute("""
-                        SELECT o.*, u.first_name, u.username 
-                        FROM orders o
-                        LEFT JOIN users u ON o.user_id = u.id
-                        WHERE o.status = 'pending'
-                        ORDER BY o.created_at DESC
-                    """)
-                    orders = cur.fetchall()
-                    
-            if not orders:
-                await update.message.reply_text("ℹ️ Нет активных заказов.")
-                return
-                
-            message = "🛒 Активные заказы:\n\n"
-            for order in orders:
-                user_info = f"{order['first_name']} (@{order['username']})" if order['first_name'] else "Аноним"
-                message += (
-                    f"📦 Заказ ID: {order['id']}\n"
-                    f"👤 Клиент: {user_info}\n"
-                    f"💰 Сумма: {order['total_price']} UAH\n"
-                    f"🕒 Создан: {order['created_at'].strftime('%d.%m.%Y %H:%M')}\n"
-                    f"🔗 Ссылка: https://t.me/{BOT_TOKEN.split(':')[0]}?start=order_id={order['id']}\n\n"
-                )
-                
-            await update.message.reply_text(message.strip())
-            
-        except Exception as e:
-            logger.error(f"❌ Ошибка получения заказов: {e}")
-            await update.message.reply_text("❌ Произошла ошибка при получении заказов.")
-
     async def button_handler(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Обработчик нажатий на кнопки"""
         query = update.callback_query
@@ -2038,18 +1824,6 @@ def health():
         'stats': bot_statistics
     }), 200
 
-@flask_app.route('/test-deeplink', methods=['GET'])
-def test_deeplink():
-    """Эндпоинт для генерации тестовой deeplink-ссылки"""
-    test_params = "order_id=123"
-    test_url = f"https://t.me/{BOT_TOKEN.split(':')[0]}?start={test_params}"
-    
-    logger.info(f"🧪 Тестовая deeplink ссылка: {test_url}")
-    return jsonify({
-        "test_link": test_url,
-        "message": "Используйте эту ссылку для тестирования"
-    })
-
 @flask_app.route(f'/{BOT_TOKEN}', methods=['POST'])
 def webhook():
     if USE_POLLING:
@@ -2085,83 +1859,50 @@ def index():
         'stats': bot_statistics
     }), 200
 
-@flask_app.route('/api/create-order', methods=['POST', 'OPTIONS'])
-def create_order():
-    """Создание нового заказа в базе данных"""
-    logger.info("🌐 Получен запрос на создание заказа")
-    
-    # Обработка OPTIONS для CORS
-    if request.method == 'OPTIONS':
-        response = make_response()
-        response.headers['Access-Control-Allow-Origin'] = '*'
-        response.headers['Access-Control-Allow-Headers'] = 'Content-Type, Authorization, X-CSRF-Token'
-        response.headers['Access-Control-Allow-Methods'] = 'GET, POST, PUT, DELETE, OPTIONS'
-        return response, 200
-    
-    try:
-        # Получаем CSRF-токен из заголовка
-        csrf_token = request.headers.get('X-CSRF-Token')
-        if not csrf_token:
-            logger.warning("❌ Отсутствует CSRF-токен в заголовке запроса")
-            return jsonify({'success': False, 'error': 'CSRF token missing'}), 403
-        
-        data = request.json
-        if not data:
-            logger.error("❌ Пустой запрос")
-            return jsonify({'success': False, 'error': 'Empty request'}), 400
-            
-        # Проверяем обязательные поля
-        required_fields = ['items', 'total']
-        for field in required_fields:
-            if field not in data:
-                logger.error(f"❌ Отсутствует обязательное поле: {field}")
-                return jsonify({'success': False, 'error': f'Missing field: {field}'}), 400
-        
-        items = data['items']
-        total = data['total']
-        user_id = data.get('user_id')
+def auto_save_loop():
+    """Функция автосохранения статистики"""
+    while True:
+        time.sleep(300)  # 5 минут
+        save_stats()
+        logger.info("✅ Статистика автосохранена")
 
-        # Валидация данных
-        if not isinstance(items, list) or len(items) == 0:
-            logger.error("❌ Неверный формат товаров")
-            return jsonify({'success': False, 'error': 'Invalid items format'}), 400
-            
-        if not isinstance(total, (int, float)) or total <= 0:
-            logger.error("❌ Неверная сумма заказа")
-            return jsonify({'success': False, 'error': 'Invalid total amount'}), 400
-        
-        # Сохраняем заказ в базу данных
-        with psycopg.connect(DATABASE_URL) as conn:
-            with conn.cursor() as cur:
-                cur.execute(
-                    "INSERT INTO orders (user_id, items, total_price) VALUES (%s, %s, %s) RETURNING id",
-                    (user_id, json.dumps(items), total)
-                )
-                order_id = cur.fetchone()[0]
-                conn.commit()
-        
-        logger.info(f"✅ Заказ создан, ID: {order_id}")
-        return jsonify({
-            'success': True,
-            'order_id': order_id
-        })
-        
-    except Exception as e:
-        logger.error(f"❌ Ошибка создания заказа: {e}")
-        logger.error(traceback.format_exc())
-        return jsonify({'success': False, 'error': str(e)}), 500
-
-@flask_app.route('/api/order/<int:order_id>', methods=['GET'])
-def get_order_endpoint(order_id):
-    """Получение информации о заказе"""
-    try:
-        order = get_order(order_id)
-        if not order:
-            return jsonify({'error': 'Order not found'}), 404
-        return jsonify(order)
-    except Exception as e:
-        logger.error(f"❌ Ошибка получения заказа: {e}")
-        return jsonify({'error': str(e)}), 500
+def main():
+    # Задержка для Render.com, чтобы избежать конфликтов
+    if os.environ.get('RENDER'):
+        logger.info("⏳ Ожидаем 10 секунд для предотвращения конфликтов...")
+        time.sleep(10)
+    
+    # Запускаем автосохранение
+    auto_save_thread = threading.Thread(target=auto_save_loop)
+    auto_save_thread.daemon = True
+    auto_save_thread.start()
+    
+    logger.info("🚀 Запуск SecureShop Telegram Bot...")
+    logger.info(f"🔑 BOT_TOKEN: {BOT_TOKEN[:10]}...")
+    logger.info(f"🌐 PORT: {PORT}")
+    logger.info(f"📡 WEBHOOK_URL: {WEBHOOK_URL}")
+    logger.info(f"⏰ PING_INTERVAL: {PING_INTERVAL} секунд")
+    logger.info(f"🔄 РЕЖИМ: {'Polling' if USE_POLLING else 'Webhook'}")
+    logger.info(f"👤 Основатель 1: {OWNER_ID_1} (@HiGki2pYYY)")
+    logger.info(f"👤 Основатель 2: {OWNER_ID_2} (@oc33t)")
+    logger.info(f"💾 DATABASE_URL: {DATABASE_URL[:30]}...")
+    
+    bot_thread_instance = threading.Thread(target=bot_thread)
+    bot_thread_instance.daemon = True
+    bot_thread_instance.start()
+    
+    time.sleep(3)
+    
+    bot_instance.start_ping_service()
+    
+    logger.info("🌐 Запуск Flask сервера...")
+    flask_app.run(
+        host='0.0.0.0',
+        port=PORT,
+        debug=False,
+        use_reloader=False,
+        threaded=True
+    )
 
 async def setup_webhook():
     if USE_POLLING:
@@ -2221,8 +1962,8 @@ def bot_thread():
         if USE_POLLING:
             loop.run_forever()
     except Conflict as e:
-        logger.error(f"🚨 Критический конфликт: {e}")
-        logger.warning("🕒 Ожидаем 30 секунд перед повторным запуском...")
+        logger.error(f"🚨 Конфликт: {e}")
+        logger.warning("🕒 Ожидаем 30 секунд перед повторной попыткой...")
         time.sleep(30)
         bot_thread()
     except Exception as e:
@@ -2239,51 +1980,6 @@ def bot_thread():
         logger.warning("🔁 Перезапускаем поток бота...")
         time.sleep(5)
         bot_thread()
-
-def auto_save_loop():
-    """Функция автосохранения статистики"""
-    while True:
-        time.sleep(300)  # 5 минут
-        save_stats()
-        logger.info("✅ Статистика автосохранена")
-
-def main():
-    # Задержка для Render.com, чтобы избежать конфликтов
-    if os.environ.get('RENDER'):
-        logger.info("⏳ Ожидаем 10 секунд для предотвращения конфликтов...")
-        time.sleep(10)
-    
-    # Запускаем автосохранение
-    auto_save_thread = threading.Thread(target=auto_save_loop)
-    auto_save_thread.daemon = True
-    auto_save_thread.start()
-    
-    logger.info("🚀 Запуск SecureShop Telegram Bot...")
-    logger.info(f"🔑 BOT_TOKEN: {BOT_TOKEN[:10]}...")
-    logger.info(f"🌐 PORT: {PORT}")
-    logger.info(f"📡 WEBHOOK_URL: {WEBHOOK_URL}")
-    logger.info(f"⏰ PING_INTERVAL: {PING_INTERVAL} секунд")
-    logger.info(f"🔄 РЕЖИМ: {'Polling' if USE_POLLING else 'Webhook'}")
-    logger.info(f"👤 Основатель 1: {OWNER_ID_1} (@HiGki2pYYY)")
-    logger.info(f"👤 Основатель 2: {OWNER_ID_2} (@oc33t)")
-    logger.info(f"💾 DATABASE_URL: {DATABASE_URL[:30]}...")
-    
-    bot_thread_instance = threading.Thread(target=bot_thread)
-    bot_thread_instance.daemon = True
-    bot_thread_instance.start()
-    
-    time.sleep(3)
-    
-    bot_instance.start_ping_service()
-    
-    logger.info("🌐 Запуск Flask сервера...")
-    flask_app.run(
-        host='0.0.0.0',
-        port=PORT,
-        debug=False,
-        use_reloader=False,
-        threaded=True
-    )
 
 if __name__ == '__main__':
     main()
