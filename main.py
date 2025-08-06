@@ -524,7 +524,7 @@ class TelegramBot:
         
         # Проверяем аргументы команды
         if not context.args:
-            await update.message.reply_text("❌ Неправильний формат команди. Використовуйте: /pay <order_id> <товар1> <товар2> ...")
+            await update.message.reply_text("❌ Неправильний формат команди. Використовуйте: /pay <order_id> <товар1> < товар2> ...")
             return
         
         # Первый аргумент - ID заказа
@@ -556,7 +556,9 @@ class TelegramBot:
                 "Cha": "ChatGPT",
                 "Dis": "Discord",
                 "Duo": "Duolingo",
-                "Pic": "PicsArt"
+                "Pic": "PicsArt",
+                "Can": "Canva",
+                "Net": "Netflix"
             }
             
             plan_map = {
@@ -565,7 +567,8 @@ class TelegramBot:
                 "Ind": "Individual",
                 "Fam": "Family",
                 "Plu": "Plus",
-                "Pro": "Pro"
+                "Pro": "Pro",
+                "Pre": "Premium"
             }
             
             service_name = service_map.get(service_abbr, service_abbr)
@@ -743,6 +746,8 @@ class TelegramBot:
             [InlineKeyboardButton("🎮 Discord", callback_data='category_discord')],
             [InlineKeyboardButton("📚 Duolingo", callback_data='category_duolingo')],
             [InlineKeyboardButton("📸 PicsArt", callback_data='category_picsart')],
+            [InlineKeyboardButton("🎨 Canva", callback_data='category_canva')],
+            [InlineKeyboardButton("📺 Netflix", callback_data='category_netflix')],
             [InlineKeyboardButton("⬅️ Назад", callback_data='back_to_main')]
         ]
         await update.message.reply_text(
@@ -798,6 +803,16 @@ class TelegramBot:
             client_id = owner_client_map[user_id]
             client_info = active_conversations.get(client_id, {}).get('user_info')
 
+            # Удаляем диалог клиента из активных
+            if client_id in active_conversations:
+                # Сохраняем детали заказа перед удалением
+                order_details = active_conversations[client_id].get('order_details', '')
+                del active_conversations[client_id]
+                delete_active_conversation(client_id)
+
+            # Удаляем связь владелец-клиент
+            del owner_client_map[user_id]
+
             try:
                 await context.bot.send_message(
                     chat_id=client_id,
@@ -814,14 +829,7 @@ class TelegramBot:
                 else:
                     logger.error(f"Помилка при сповіщенні клієнта {client_id} про завершення діалогу: {e}")
                 await update.message.reply_text("Не вдалося сповістити клієнта (можливо, він заблокував бота), але діалог було завершено з вашого боку.")
-
-            if client_id in active_conversations:
-                del active_conversations[client_id]
-            if user_id in owner_client_map:
-                del owner_client_map[user_id]
             
-            # Удаляем из базы данных
-            delete_active_conversation(client_id);
             return
 
         # Для обычных пользователей: завершение своего диалога
@@ -973,6 +981,7 @@ class TelegramBot:
                 )
                 
                 # Добавляем кнопку "Продолжить" для каждого чата
+                # Показываем кнопку даже если диалог назначен другому
                 keyboard.append([
                     InlineKeyboardButton(
                         f"Продолжить диалог с {client_info['first_name']}",
@@ -1149,6 +1158,8 @@ class TelegramBot:
                 [InlineKeyboardButton("🎮 Discord", callback_data='category_discord')],
                 [InlineKeyboardButton("📚 Duolingo", callback_data='category_duolingo')],
                 [InlineKeyboardButton("📸 PicsArt", callback_data='category_picsart')],
+                [InlineKeyboardButton("🎨 Canva", callback_data='category_canva')],
+                [InlineKeyboardButton("📺 Netflix", callback_data='category_netflix')],
                 [InlineKeyboardButton("⬅️ Назад", callback_data='back_to_main')]
             ]
             await query.edit_message_text(
@@ -1290,6 +1301,53 @@ class TelegramBot:
                 reply_markup=InlineKeyboardMarkup(keyboard)
             )
         
+        # Меню Canva
+        elif query.data == 'category_canva':
+            keyboard = [
+                [InlineKeyboardButton("👤 Individual", callback_data='canva_individual')],
+                [InlineKeyboardButton("👨‍👩‍👧‍👦 Family", callback_data='canva_family')],
+                [InlineKeyboardButton("⬅️ Назад", callback_data='order')]
+            ]
+            await query.edit_message_text(
+                "🎨 Оберіть тариф Canva:",
+                reply_markup=InlineKeyboardMarkup(keyboard)
+            )
+        
+        # Подменю Canva Individual
+        elif query.data == 'canva_individual':
+            keyboard = [
+                [InlineKeyboardButton("1 місяць - 350 UAH", callback_data='canva_ind_1')],
+                [InlineKeyboardButton("12 місяців - 3000 UAH", callback_data='canva_ind_12')],
+                [InlineKeyboardButton("⬅️ Назад", callback_data='category_canva')]
+            ]
+            await query.edit_message_text(
+                "👤 Canva Individual:",
+                reply_markup=InlineKeyboardMarkup(keyboard)
+            )
+        
+        # Подменю Canva Family
+        elif query.data == 'canva_family':
+            keyboard = [
+                [InlineKeyboardButton("1 місяць - 850 UAH", callback_data='canva_fam_1')],
+                [InlineKeyboardButton("12 місяців - 7500 UAH", callback_data='canva_fam_12')],
+                [InlineKeyboardButton("⬅️ Назад", callback_data='category_canva')]
+            ]
+            await query.edit_message_text(
+                "👨‍👩‍👧‍👦 Canva Family:",
+                reply_markup=InlineKeyboardMarkup(keyboard)
+            )
+        
+        # Меню Netflix
+        elif query.data == 'category_netflix':
+            keyboard = [
+                [InlineKeyboardButton("1 місяць - 350 UAH", callback_data='netflix_1')],
+                [InlineKeyboardButton("⬅️ Назад", callback_data='order')]
+            ]
+            await query.edit_message_text(
+                "📺 Оберіть варіант Netflix:",
+                reply_markup=InlineKeyboardMarkup(keyboard)
+            )
+        
         # Обработка выбора товара
         elif query.data in [
             'chatgpt_1',
@@ -1297,7 +1355,10 @@ class TelegramBot:
             'discord_full_1', 'discord_full_12',
             'duolingo_ind_1', 'duolingo_ind_12', 'duolingo_fam_12',
             'picsart_plus_1', 'picsart_plus_12',
-            'picsart_pro_1', 'picsart_pro_12'
+            'picsart_pro_1', 'picsart_pro_12',
+            'canva_ind_1', 'canva_ind_12',
+            'canva_fam_1', 'canva_fam_12',
+            'netflix_1'
         ]:
             # Сохраняем выбранный товар в контексте
             context.user_data['selected_product'] = query.data
@@ -1415,6 +1476,14 @@ class TelegramBot:
             await query.edit_message_text(
                 f"✅ Ви взяли замовлення від клієнта {client_info.first_name}."
             )
+            
+            # Отправляем сводку заказа основателю
+            if 'order_details' in active_conversations[client_id]:
+                order_text = active_conversations[client_id]['order_details']
+                await context.bot.send_message(
+                    chat_id=owner_id,
+                    text=f"📝 Деталі замовлення:\n\n{order_text}"
+                )
             
             # Уведомляем другого основателя
             other_owner = OWNER_ID_2 if owner_id == OWNER_ID_1 else OWNER_ID_1
@@ -1868,6 +1937,11 @@ class TelegramBot:
             'picsart_plus_12': {'name': "PicsArt Plus (12 місяців)", 'price': 800},
             'picsart_pro_1': {'name': "PicsArt Pro (1 місяць)", 'price': 180},
             'picsart_pro_12': {'name': "PicsArt Pro (12 місяців)", 'price': 1000},
+            'canva_ind_1': {'name': "Canva Individual (1 місяць)", 'price': 350},
+            'canva_ind_12': {'name': "Canva Individual (12 місяців)", 'price': 3000},
+            'canva_fam_1': {'name': "Canva Family (1 місяць)", 'price': 850},
+            'canva_fam_12': {'name': "Canva Family (12 місяців)", 'price': 7500},
+            'netflix_1': {'name': "Netflix Premium (1 місяць)", 'price': 350}
         }
         return products.get(product_code, {'name': "Невідомий товар", 'price': 0})
     
@@ -1886,6 +1960,11 @@ class TelegramBot:
             'picsart_plus_12': 'picsart_plus',
             'picsart_pro_1': 'picsart_pro',
             'picsart_pro_12': 'picsart_pro',
+            'canva_ind_1': 'canva_individual',
+            'canva_ind_12': 'canva_individual',
+            'canva_fam_1': 'canva_family',
+            'canva_fam_12': 'canva_family',
+            'netflix_1': 'category_netflix'
         }
         return category_map.get(product_code, 'order')
 
