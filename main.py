@@ -420,6 +420,7 @@ class TelegramBot:
         self.application.add_handler(CommandHandler("chats", self.show_active_chats))
         self.application.add_handler(CommandHandler("history", self.show_conversation_history))
         self.application.add_handler(CommandHandler("dialog", self.start_dialog_command))
+        self.application.add_handler(CommandHandler("pay", self.pay_command))  # Обработчик команды /pay
         self.application.add_handler(CallbackQueryHandler(self.button_handler))
         self.application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, self.handle_message))
         # Добавляем обработчик документов (JSON-файлов)
@@ -511,6 +512,104 @@ class TelegramBot:
         await update.message.reply_text(
             welcome_message.strip(),
             reply_markup=reply_markup
+        )
+    
+    async def pay_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Обработчик команды /pay для заказов с сайта"""
+        user = update.effective_user
+        user_id = user.id
+        
+        # Гарантируем наличие пользователя в БД
+        ensure_user_exists(user)
+        
+        # Проверяем аргументы команды
+        if not context.args:
+            await update.message.reply_text("❌ Неправильний формат команди. Використовуйте: /pay <order_id> <товар1> <товар2> ...")
+            return
+        
+        # Первый аргумент - ID заказа
+        order_id = context.args[0]
+        items = context.args[1:]
+        
+        if not items:
+            await update.message.reply_text("❌ Відсутні товари у замовленні.")
+            return
+        
+        # Формируем текст заказа
+        order_text = f"🛍️ Замовлення з сайту (#{order_id}):\n\n"
+        total = 0
+        
+        for item in items:
+            # Формат: <сокращенное_название_услуги>-<план>-<период>-<цена>
+            parts = item.split('-')
+            if len(parts) < 4:
+                continue
+                
+            service_abbr = parts[0]
+            plan_abbr = parts[1]
+            period = parts[2]
+            price = parts[3]
+            
+            # Расшифровка сокращений
+            service_map = {
+                "Cha": "ChatGPT",
+                "Dis": "Discord",
+                "Duo": "Duolingo",
+                "Pic": "PicsArt"
+            }
+            
+            plan_map = {
+                "Bas": "Basic",
+                "Ful": "Full",
+                "Ind": "Individual",
+                "Fam": "Family",
+                "Plu": "Plus",
+                "Pro": "Pro"
+            }
+            
+            service_name = service_map.get(service_abbr, service_abbr)
+            plan_name = plan_map.get(plan_abbr, plan_abbr)
+            
+            try:
+                price_num = int(price)
+                total += price_num
+                order_text += f"▫️ {service_name} {plan_name} ({period}) - {price_num} UAH\n"
+            except ValueError:
+                continue
+        
+        if total == 0:
+            await update.message.reply_text("❌ Не вдалося обробити замовлення. Перевірте формат товарів.")
+            return
+        
+        order_text += f"\n💳 Всього: {total} UAH"
+        
+        # Создаем запись о заказе
+        active_conversations[user_id] = {
+            'type': 'order',
+            'user_info': user,
+            'assigned_owner': None,
+            'order_details': order_text,
+            'last_message': order_text,
+            'from_website': True
+        }
+        
+        save_active_conversation(user_id, 'order', None, order_text)
+        
+        # Обновляем статистику
+        bot_statistics['total_orders'] += len(items)
+        save_stats()
+        
+        # Пересылаем заказ обоим владельцам
+        await self.forward_order_to_owners(
+            context, 
+            user_id, 
+            user, 
+            order_text
+        )
+        
+        await update.message.reply_text(
+            f"✅ Ваше замовлення #{order_id} прийнято! Засновник магазину зв'яжеться з вами найближчим часом.\n\n"
+            "Ви можете продовжити з іншим запитанням або замовленням."
         )
     
     async def handle_document(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
