@@ -529,10 +529,16 @@ class TelegramBot:
         
         # Первый аргумент - ID заказа
         order_id = context.args[0]
-        items = context.args[1:]
+        
+        # Объединяем все аргументы в одну строку
+        items_str = " ".join(context.args[1:])
+        
+        # Используем регулярное выражение для извлечения товаров
+        pattern = r'(\w{3})-(\w{3})-([\w\s]+?)-(\d+)'
+        items = re.findall(pattern, items_str)
         
         if not items:
-            await update.message.reply_text("❌ Відсутні товари у замовленні.")
+            await update.message.reply_text("❌ Не вдалося розпізнати товари у замовленні. Перевірте формат.")
             return
         
         # Формируем текст заказа
@@ -540,15 +546,10 @@ class TelegramBot:
         total = 0
         
         for item in items:
-            # Формат: <сокращенное_название_услуги>-<план>-<период>-<цена>
-            parts = item.split('-')
-            if len(parts) < 4:
-                continue
-                
-            service_abbr = parts[0]
-            plan_abbr = parts[1]
-            period = parts[2]
-            price = parts[3]
+            service_abbr = item[0]
+            plan_abbr = item[1]
+            period = item[2].strip()  # Убираем лишние пробелы
+            price = item[3]
             
             # Расшифровка сокращений
             service_map = {
@@ -573,6 +574,8 @@ class TelegramBot:
             try:
                 price_num = int(price)
                 total += price_num
+                # Заменяем сокращения для читаемости
+                period = period.replace("м", "міс.").replace(" ", "")
                 order_text += f"▫️ {service_name} {plan_name} ({period}) - {price_num} UAH\n"
             except ValueError:
                 continue
@@ -818,7 +821,7 @@ class TelegramBot:
                 del owner_client_map[user_id]
             
             # Удаляем из базы данных
-            delete_active_conversation(client_id)
+            delete_active_conversation(client_id);
             return
 
         # Для обычных пользователей: завершение своего диалога
