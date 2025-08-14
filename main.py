@@ -1352,12 +1352,12 @@ class TelegramBot:
         # Подменю Discord Украшення З Nitro
         elif query.data == 'discord_decor_with_nitro':
             keyboard = [
-                [InlineKeyboardButton("5€ - 145 UAH", callback_data='discord_decor_zn_5')],
-                [InlineKeyboardButton("7€ - 205 UAH", callback_data='discord_decor_zn_7')],
-                [InlineKeyboardButton("8.5€ - 250 UAH", callback_data='discord_decor_zn_8_5')],
-                [InlineKeyboardButton("9€ - 265 UAH", callback_data='discord_decor_zn_9')],
-                [InlineKeyboardButton("14€ - 410 UAH", callback_data='discord_decor_zn_14')],
-                [InlineKeyboardButton("22€ - 650 UAH", callback_data='discord_decor_zn_22')],
+                [InlineKeyboardButton("5$ - 145 UAH", callback_data='discord_decor_zn_5')],
+                [InlineKeyboardButton("7$ - 205 UAH", callback_data='discord_decor_zn_7')],
+                [InlineKeyboardButton("8.5$ - 250 UAH", callback_data='discord_decor_zn_8_5')],
+                [InlineKeyboardButton("9$ - 265 UAH", callback_data='discord_decor_zn_9')],
+                [InlineKeyboardButton("14$ - 410 UAH", callback_data='discord_decor_zn_14')],
+                [InlineKeyboardButton("22$ - 650 UAH", callback_data='discord_decor_zn_22')],
                 [InlineKeyboardButton("⬅️ Назад", callback_data='category_discord_decor')]
             ]
             await query.edit_message_text(
