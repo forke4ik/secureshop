@@ -649,7 +649,7 @@ class TelegramBot:
             await update.message.reply_text("❌ Файл має неправильний формат JSON.")
             return
         # Проверяем структуру заказа
-        if 'items' not in order_data or 'total' not in order_data:
+        if 'items' not in order_data or 'total' not in order_
             await update.message.reply_text("❌ У файлі відсутні обов'язкові поля (items, total).")
             return
         # Формируем текст заказа
@@ -1332,17 +1332,17 @@ class TelegramBot:
         # Подменю Discord Украшення Без Nitro
         elif query.data == 'discord_decor_without_nitro':
             keyboard = [
-                [InlineKeyboardButton("6$ - 180 UAH", callback_data='discord_decor_bzn_6')],
-                [InlineKeyboardButton("8$ - 235 UAH", callback_data='discord_decor_bzn_8')],
-                [InlineKeyboardButton("10$ - 295 UAH", callback_data='discord_decor_bzn_10')],
-                [InlineKeyboardButton("11$ - 325 UAH", callback_data='discord_decor_bzn_11')],
-                [InlineKeyboardButton("12$ - 355 UAH", callback_data='discord_decor_bzn_12')],
-                [InlineKeyboardButton("13$ - 385 UAH", callback_data='discord_decor_bzn_13')],
-                [InlineKeyboardButton("15$ - 440 UAH", callback_data='discord_decor_bzn_15')],
-                [InlineKeyboardButton("16$ - 470 UAH", callback_data='discord_decor_bzn_16')],
-                [InlineKeyboardButton("18$ - 530 UAH", callback_data='discord_decor_bzn_18')],
-                [InlineKeyboardButton("24$ - 705 UAH", callback_data='discord_decor_bzn_24')],
-                [InlineKeyboardButton("29$ - 855 UAH", callback_data='discord_decor_bzn_29')],
+                [InlineKeyboardButton("6€ - 180 UAH", callback_data='discord_decor_bzn_6')],
+                [InlineKeyboardButton("8€ - 235 UAH", callback_data='discord_decor_bzn_8')],
+                [InlineKeyboardButton("10€ - 295 UAH", callback_data='discord_decor_bzn_10')],
+                [InlineKeyboardButton("11€ - 325 UAH", callback_data='discord_decor_bzn_11')],
+                [InlineKeyboardButton("12€ - 355 UAH", callback_data='discord_decor_bzn_12')],
+                [InlineKeyboardButton("13€ - 385 UAH", callback_data='discord_decor_bzn_13')],
+                [InlineKeyboardButton("15€ - 440 UAH", callback_data='discord_decor_bzn_15')],
+                [InlineKeyboardButton("16€ - 470 UAH", callback_data='discord_decor_bzn_16')],
+                [InlineKeyboardButton("18€ - 530 UAH", callback_data='discord_decor_bzn_18')],
+                [InlineKeyboardButton("24€ - 705 UAH", callback_data='discord_decor_bzn_24')],
+                [InlineKeyboardButton("29€ - 855 UAH", callback_data='discord_decor_bzn_29')],
                 [InlineKeyboardButton("⬅️ Назад", callback_data='category_discord_decor')]
             ]
             await query.edit_message_text(
@@ -1352,12 +1352,12 @@ class TelegramBot:
         # Подменю Discord Украшення З Nitro
         elif query.data == 'discord_decor_with_nitro':
             keyboard = [
-                [InlineKeyboardButton("5$ - 145 UAH", callback_data='discord_decor_zn_5')],
-                [InlineKeyboardButton("7$ - 205 UAH", callback_data='discord_decor_zn_7')],
-                [InlineKeyboardButton("8.5$ - 250 UAH", callback_data='discord_decor_zn_8_5')],
-                [InlineKeyboardButton("9$ - 265 UAH", callback_data='discord_decor_zn_9')],
-                [InlineKeyboardButton("14$ - 410 UAH", callback_data='discord_decor_zn_14')],
-                [InlineKeyboardButton("22$ - 650 UAH", callback_data='discord_decor_zn_22')],
+                [InlineKeyboardButton("5€ - 145 UAH", callback_data='discord_decor_zn_5')],
+                [InlineKeyboardButton("7€ - 205 UAH", callback_data='discord_decor_zn_7')],
+                [InlineKeyboardButton("8.5€ - 250 UAH", callback_data='discord_decor_zn_8_5')],
+                [InlineKeyboardButton("9€ - 265 UAH", callback_data='discord_decor_zn_9')],
+                [InlineKeyboardButton("14€ - 410 UAH", callback_data='discord_decor_zn_14')],
+                [InlineKeyboardButton("22€ - 650 UAH", callback_data='discord_decor_zn_22')],
                 [InlineKeyboardButton("⬅️ Назад", callback_data='category_discord_decor')]
             ]
             await query.edit_message_text(
@@ -2079,7 +2079,7 @@ def webhook():
         return jsonify({'error': 'Bot not initialized'}), 500
     try:
         json_data = request.get_json()
-        if json_data:
+        if json_
             update = Update.de_json(json_data, telegram_app.bot)
             pass
         return '', 200
