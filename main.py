@@ -520,9 +520,9 @@ class TelegramBot:
         
         # Используем регулярное выражение для извлечения товаров
         # Формат: <ServiceAbbr>-<PlanAbbr>-<Period>-<Price>
-        # Для Discord Decor: DisU-BzN-6€-180
+        # Для Discord Прикраси: DisU-BzN-6$-180
         # Для обычных подписок: Dis-Ful-1м-170
-        pattern = r'(\w{2,4})-(\w{2,4})-([\w\s€]+?)-(\d+)'
+        pattern = r'(\w{2,4})-(\w{2,4})-([\w\s$]+?)-(\d+)'
         items = re.findall(pattern, items_str)
         
         if not items:
@@ -549,7 +549,7 @@ class TelegramBot:
                 "Pic": "PicsArt",
                 "Can": "Canva",
                 "Net": "Netflix",
-                "DisU": "Discord Украшення" # Новый тип
+                "DisU": "Discord Прикраси" # Обновлено: Украшення -> Прикраси
             }
             
             # Планы
@@ -561,8 +561,8 @@ class TelegramBot:
                 "Plu": "Plus",
                 "Pro": "Pro",
                 "Pre": "Premium",
-                "BzN": "Без Nitro", # Для украшений
-                "ZN": "З Nitro"     # Для украшений
+                "BzN": "Без Nitro", # Для прикрас
+                "ZN": "З Nitro"     # Для прикрас
             }
             
             service_name = service_map.get(service_abbr, service_abbr)
@@ -573,7 +573,7 @@ class TelegramBot:
                 total += price_num
                 
                 # Определяем тип заказа на основе сервиса
-                order_type = 'subscription_order' if service_abbr != 'DisU' else 'digital_order'
+                order_type = 'digital_order' if service_abbr == 'DisU' else 'subscription_order'
                 
                 # Формируем строку для отображения
                 display_period = period.replace("м", "міс.").replace(" ", "")
@@ -595,7 +595,7 @@ class TelegramBot:
         order_text += f"\n💳 Всього: {total} UAH"
 
         # Создаем запись о заказе
-        conversation_type = 'digital_order' if any('DisU' in item[0] for item in items) else 'subscription_order'
+        conversation_type = 'digital_order' if any(item[0] == 'DisU' for item in items) else 'subscription_order'
         
         active_conversations[user_id] = {
             'type': conversation_type,
@@ -649,7 +649,7 @@ class TelegramBot:
             await update.message.reply_text("❌ Файл має неправильний формат JSON.")
             return
         # Проверяем структуру заказа
-        if 'items' not in order_data or 'total' not in order_
+        if 'items' not in order_data or 'total' not in order_data:
             await update.message.reply_text("❌ У файлі відсутні обов'язкові поля (items, total).")
             return
         # Формируем текст заказа
@@ -659,7 +659,7 @@ class TelegramBot:
         order_text += f"\n💳 Всього: {order_data['total']} UAH"
         
         # Определяем тип заказа (простая логика, можно усложнить)
-        has_digital = any("Украшення" in item.get('service', '') for item in order_data['items'])
+        has_digital = any("Прикраси" in item.get('service', '') for item in order_data['items']) # Обновлено
         conversation_type = 'digital_order' if has_digital else 'subscription_order'
 
         # Создаем запись о заказе
@@ -1155,7 +1155,7 @@ class TelegramBot:
         # Выбор категории: Цифрові товари
         elif query.data == 'order_digital':
             keyboard = [
-                [InlineKeyboardButton("🎮 Discord Украшення", callback_data='category_discord_decor')],
+                [InlineKeyboardButton("🎮 Discord Прикраси", callback_data='category_discord_decor')], # Обновлено
                 # Добавить другие цифровые товары здесь
                 [InlineKeyboardButton("⬅️ Назад", callback_data='order')]
             ]
@@ -1318,7 +1318,7 @@ class TelegramBot:
             )
 
         # --- Меню Цифрових товарів ---
-        # Меню Discord Украшення
+        # Меню Discord Прикраси
         elif query.data == 'category_discord_decor':
             keyboard = [
                 [InlineKeyboardButton("Без Nitro", callback_data='discord_decor_without_nitro')],
@@ -1326,42 +1326,42 @@ class TelegramBot:
                 [InlineKeyboardButton("⬅️ Назад", callback_data='order_digital')]
             ]
             await query.edit_message_text(
-                "🎮 Оберіть тип украшення Discord:",
+                "🎮 Оберіть тип прикраси Discord:", # Обновлено
                 reply_markup=InlineKeyboardMarkup(keyboard)
             )
-        # Подменю Discord Украшення Без Nitro
+        # Подменю Discord Прикраси Без Nitro
         elif query.data == 'discord_decor_without_nitro':
             keyboard = [
-                [InlineKeyboardButton("6€ - 180 UAH", callback_data='discord_decor_bzn_6')],
-                [InlineKeyboardButton("8€ - 235 UAH", callback_data='discord_decor_bzn_8')],
-                [InlineKeyboardButton("10€ - 295 UAH", callback_data='discord_decor_bzn_10')],
-                [InlineKeyboardButton("11€ - 325 UAH", callback_data='discord_decor_bzn_11')],
-                [InlineKeyboardButton("12€ - 355 UAH", callback_data='discord_decor_bzn_12')],
-                [InlineKeyboardButton("13€ - 385 UAH", callback_data='discord_decor_bzn_13')],
-                [InlineKeyboardButton("15€ - 440 UAH", callback_data='discord_decor_bzn_15')],
-                [InlineKeyboardButton("16€ - 470 UAH", callback_data='discord_decor_bzn_16')],
-                [InlineKeyboardButton("18€ - 530 UAH", callback_data='discord_decor_bzn_18')],
-                [InlineKeyboardButton("24€ - 705 UAH", callback_data='discord_decor_bzn_24')],
-                [InlineKeyboardButton("29€ - 855 UAH", callback_data='discord_decor_bzn_29')],
+                [InlineKeyboardButton("6$ - 180 UAH", callback_data='discord_decor_bzn_6')],
+                [InlineKeyboardButton("8$ - 235 UAH", callback_data='discord_decor_bzn_8')],
+                [InlineKeyboardButton("10$ - 295 UAH", callback_data='discord_decor_bzn_10')],
+                [InlineKeyboardButton("11$ - 325 UAH", callback_data='discord_decor_bzn_11')],
+                [InlineKeyboardButton("12$ - 355 UAH", callback_data='discord_decor_bzn_12')],
+                [InlineKeyboardButton("13$ - 385 UAH", callback_data='discord_decor_bzn_13')],
+                [InlineKeyboardButton("15$ - 440 UAH", callback_data='discord_decor_bzn_15')],
+                [InlineKeyboardButton("16$ - 470 UAH", callback_data='discord_decor_bzn_16')],
+                [InlineKeyboardButton("18$ - 530 UAH", callback_data='discord_decor_bzn_18')],
+                [InlineKeyboardButton("24$ - 705 UAH", callback_data='discord_decor_bzn_24')],
+                [InlineKeyboardButton("29$ - 855 UAH", callback_data='discord_decor_bzn_29')],
                 [InlineKeyboardButton("⬅️ Назад", callback_data='category_discord_decor')]
             ]
             await query.edit_message_text(
-                "🎮 Discord Украшення (Без Nitro):",
+                "🎮 Discord Прикраси (Без Nitro):", # Обновлено
                 reply_markup=InlineKeyboardMarkup(keyboard)
             )
-        # Подменю Discord Украшення З Nitro
+        # Подменю Discord Прикраси З Nitro
         elif query.data == 'discord_decor_with_nitro':
             keyboard = [
-                [InlineKeyboardButton("5€ - 145 UAH", callback_data='discord_decor_zn_5')],
-                [InlineKeyboardButton("7€ - 205 UAH", callback_data='discord_decor_zn_7')],
-                [InlineKeyboardButton("8.5€ - 250 UAH", callback_data='discord_decor_zn_8_5')],
-                [InlineKeyboardButton("9€ - 265 UAH", callback_data='discord_decor_zn_9')],
-                [InlineKeyboardButton("14€ - 410 UAH", callback_data='discord_decor_zn_14')],
-                [InlineKeyboardButton("22€ - 650 UAH", callback_data='discord_decor_zn_22')],
+                [InlineKeyboardButton("5$ - 145 UAH", callback_data='discord_decor_zn_5')],
+                [InlineKeyboardButton("7$ - 205 UAH", callback_data='discord_decor_zn_7')],
+                [InlineKeyboardButton("8.5$ - 250 UAH", callback_data='discord_decor_zn_8_5')],
+                [InlineKeyboardButton("9$ - 265 UAH", callback_data='discord_decor_zn_9')],
+                [InlineKeyboardButton("14$ - 410 UAH", callback_data='discord_decor_zn_14')],
+                [InlineKeyboardButton("22$ - 650 UAH", callback_data='discord_decor_zn_22')],
                 [InlineKeyboardButton("⬅️ Назад", callback_data='category_discord_decor')]
             ]
             await query.edit_message_text(
-                "🎮 Discord Украшення (З Nitro):",
+                "🎮 Discord Прикраси (З Nitro):", # Обновлено
                 reply_markup=InlineKeyboardMarkup(keyboard)
             )
 
@@ -1393,7 +1393,7 @@ class TelegramBot:
                 reply_markup=InlineKeyboardMarkup(keyboard)
             )
 
-        # Обработка выбора товара (Цифровые товары - Discord Украшення)
+        # Обработка выбора товара (Цифровые товары - Discord Прикраси)
         elif query.data in [
             'discord_decor_bzn_6', 'discord_decor_bzn_8', 'discord_decor_bzn_10',
             'discord_decor_bzn_11', 'discord_decor_bzn_12', 'discord_decor_bzn_13',
@@ -1820,7 +1820,7 @@ class TelegramBot:
     async def forward_order_to_owners(self, context, client_id, client_info, order_text):
         """Пересылает заказ обоим владельцам"""
         # Проверяем тип заказа из активных диалогов
-        conversation_type = 'digital_order' if 'Discord Украшення' in order_text else 'subscription_order'
+        conversation_type = 'digital_order' if 'Discord Прикраси' in order_text else 'subscription_order' # Обновлено
         
         # Сохраняем последнее сообщение
         active_conversations[client_id]['last_message'] = order_text
@@ -1964,25 +1964,25 @@ class TelegramBot:
         return products.get(product_code, {'name': "Невідомий товар", 'price': 0})
 
     def get_digital_product_info(self, product_code):
-        """Возвращает информацию о цифровом товаре по его коду (Discord Украшення)"""
+        """Возвращает информацию о цифровом товаре по его коду (Discord Прикраси)"""
         products = {
-            'discord_decor_bzn_6': {'name': "Discord Украшення (Без Nitro) 6€", 'price': 180},
-            'discord_decor_bzn_8': {'name': "Discord Украшення (Без Nitro) 8€", 'price': 235},
-            'discord_decor_bzn_10': {'name': "Discord Украшення (Без Nitro) 10€", 'price': 295},
-            'discord_decor_bzn_11': {'name': "Discord Украшення (Без Nitro) 11€", 'price': 325},
-            'discord_decor_bzn_12': {'name': "Discord Украшення (Без Nitro) 12€", 'price': 355},
-            'discord_decor_bzn_13': {'name': "Discord Украшення (Без Nitro) 13€", 'price': 385},
-            'discord_decor_bzn_15': {'name': "Discord Украшення (Без Nitro) 15€", 'price': 440},
-            'discord_decor_bzn_16': {'name': "Discord Украшення (Без Nitro) 16€", 'price': 470},
-            'discord_decor_bzn_18': {'name': "Discord Украшення (Без Nitro) 18€", 'price': 530},
-            'discord_decor_bzn_24': {'name': "Discord Украшення (Без Nitro) 24€", 'price': 705},
-            'discord_decor_bzn_29': {'name': "Discord Украшення (Без Nitro) 29€", 'price': 855},
-            'discord_decor_zn_5': {'name': "Discord Украшення (З Nitro) 5€", 'price': 145},
-            'discord_decor_zn_7': {'name': "Discord Украшення (З Nitro) 7€", 'price': 205},
-            'discord_decor_zn_8_5': {'name': "Discord Украшення (З Nitro) 8.5€", 'price': 250},
-            'discord_decor_zn_9': {'name': "Discord Украшення (З Nitro) 9€", 'price': 265},
-            'discord_decor_zn_14': {'name': "Discord Украшення (З Nitro) 14€", 'price': 410},
-            'discord_decor_zn_22': {'name': "Discord Украшення (З Nitro) 22€", 'price': 650},
+            'discord_decor_bzn_6': {'name': "Discord Прикраси (Без Nitro) 6$", 'price': 180}, # Обновлено
+            'discord_decor_bzn_8': {'name': "Discord Прикраси (Без Nitro) 8$", 'price': 235}, # Обновлено
+            'discord_decor_bzn_10': {'name': "Discord Прикраси (Без Nitro) 10$", 'price': 295}, # Обновлено
+            'discord_decor_bzn_11': {'name': "Discord Прикраси (Без Nitro) 11$", 'price': 325}, # Обновлено
+            'discord_decor_bzn_12': {'name': "Discord Прикраси (Без Nitro) 12$", 'price': 355}, # Обновлено
+            'discord_decor_bzn_13': {'name': "Discord Прикраси (Без Nitro) 13$", 'price': 385}, # Обновлено
+            'discord_decor_bzn_15': {'name': "Discord Прикраси (Без Nitro) 15$", 'price': 440}, # Обновлено
+            'discord_decor_bzn_16': {'name': "Discord Прикраси (Без Nitro) 16$", 'price': 470}, # Обновлено
+            'discord_decor_bzn_18': {'name': "Discord Прикраси (Без Nitro) 18$", 'price': 530}, # Обновлено
+            'discord_decor_bzn_24': {'name': "Discord Прикраси (Без Nitro) 24$", 'price': 705}, # Обновлено
+            'discord_decor_bzn_29': {'name': "Discord Прикраси (Без Nitro) 29$", 'price': 855}, # Обновлено
+            'discord_decor_zn_5': {'name': "Discord Прикраси (З Nitro) 5$", 'price': 145}, # Обновлено
+            'discord_decor_zn_7': {'name': "Discord Прикраси (З Nitro) 7$", 'price': 205}, # Обновлено
+            'discord_decor_zn_8_5': {'name': "Discord Прикраси (З Nitro) 8.5$", 'price': 250}, # Обновлено
+            'discord_decor_zn_9': {'name': "Discord Прикраси (З Nitro) 9$", 'price': 265}, # Обновлено
+            'discord_decor_zn_14': {'name': "Discord Прикраси (З Nitro) 14$", 'price': 410}, # Обновлено
+            'discord_decor_zn_22': {'name': "Discord Прикраси (З Nitro) 22$", 'price': 650}, # Обновлено
         }
         return products.get(product_code, {'name': "Невідомий цифровий товар", 'price': 0})
 
@@ -2079,7 +2079,7 @@ def webhook():
         return jsonify({'error': 'Bot not initialized'}), 500
     try:
         json_data = request.get_json()
-        if json_
+        if json_data:
             update = Update.de_json(json_data, telegram_app.bot)
             pass
         return '', 200
