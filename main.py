@@ -393,7 +393,7 @@ class TelegramBot:
     async def set_commands_menu(self):
         """Установка стандартного меню команд"""
         owner_commands = [BotCommandScopeChat(chat_id=OWNER_ID_1), BotCommandScopeChat(chat_id=OWNER_ID_2)]
-        user_commands = [BotCommandScopeChat(chat_id='*')] # Для всех остальных
+        user_commands = [BotCommandScopeDefault()]
 
         try:
             # Команды для основателей
