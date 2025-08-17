@@ -290,7 +290,7 @@ class TelegramBot:
             logger.error(f"❌ Ошибка сохранения статистики: {e}")
 
     # --- Глобальные переменные для данных ---
-    bot_statistics = load_stats.__func__() # type: ignore
+    bot_statistics = load_stats()
     active_conversations = {} # {user_id: {...}}
     owner_client_map = {} # {owner_id: client_id}
 
