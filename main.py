@@ -378,7 +378,8 @@ class TelegramBot:
         # Обработчики callback кнопок
         self.application.add_handler(CallbackQueryHandler(self.button_handler))
         # - Добавлено: Обработчик callback кнопок оплаты -
-        self.application.add_handler(CallbackQueryHandler(self.payment_callback_handler, pattern='^(pay_|payout_|check_payment_status|manual_payment_confirmed|payout_manual_payment_confirmed|back_to_|payout_cancel)'))
+        # Убедитесь, что pattern охватывает все payout_ callback_data
+        self.application.add_handler(CallbackQueryHandler(self.payment_callback_handler, pattern='^(pay_|payout_|check_payment_status|manual_payment_confirmed|back_to_|payout_cancel|payout_check_payment_status|payout_manual_payment_confirmed|payout_crypto_)'))
         # - Конец добавленных обработчиков -
 
         # Обработчик текстовых сообщений (должен быть последним)
