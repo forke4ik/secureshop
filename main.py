@@ -7,6 +7,7 @@ import time
 import json
 import re
 from datetime import datetime
+from telegram import BotCommandScopeDefault
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, User, BotCommandScopeChat
 from telegram.ext import Application, CommandHandler, MessageHandler, CallbackQueryHandler, filters, ContextTypes
 from telegram.error import Conflict
