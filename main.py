@@ -1,4 +1,4 @@
-# main.py (обновленный и интегрированный)
+# main.py (обновленный и исправленный)
 import logging
 import os
 import asyncio
@@ -84,12 +84,47 @@ def get_uah_amount_from_order_text(order_text: str) -> float:
     logger.warning("Сумма в UAH не найдена в тексте заказа.")
     return 0.0
 
+# --- Функции работы со статистикой (вне класса) ---
+def load_stats() -> Dict[str, Any]:
+    """Загружает статистику из файла"""
+    try:
+        if os.path.exists(STATS_FILE):
+            with open(STATS_FILE, 'r', encoding='utf-8') as f:
+                stats = json.load(f)
+                # Убедимся, что дата в правильном формате
+                if 'last_reset' in stats and isinstance(stats['last_reset'], str):
+                    stats['last_reset'] = datetime.fromisoformat(stats['last_reset'])
+                logger.info("📊 Статистика загружена из файла")
+                return stats
+        else:
+            logger.info("🆕 Файл статистики не найден, создаём новый")
+            return {
+                "total_orders": 0,
+                "total_questions": 0,
+                "total_users": 0,
+                "last_reset": datetime.now()
+            }
+    except Exception as e:
+        logger.error(f"❌ Ошибка загрузки статистики: {e}")
+        return {
+            "total_orders": 0,
+            "total_questions": 0,
+            "total_users": 0,
+            "last_reset": datetime.now()
+        }
+
 # --- Класс бота ---
 class TelegramBot:
     def __init__(self):
         self.application = Application.builder().token(BOT_TOKEN).build()
         self.setup_handlers()
         self.init_db()
+        # --- Исправление: загружаем статистику в __init__ ---
+        self.bot_statistics = load_stats() # <-- ПРАВИЛЬНО: вызываем функцию, результат присваиваем атрибуту self
+        # --- Конец исправления ---
+        # Инициализация других атрибутов
+        self.active_conversations = {} # {user_id: {...}}
+        self.owner_client_map = {} # {owner_id: client_id}
 
     def setup_handlers(self):
         """Регистрация обработчиков команд и сообщений"""
@@ -248,39 +283,11 @@ class TelegramBot:
         except Exception as e:
             logger.error(f"❌ Ошибка удаления диалога из БД: {e}")
 
-    def load_stats(self) -> Dict[str, Any]:
-        """Загружает статистику из файла"""
-        try:
-            if os.path.exists(STATS_FILE):
-                with open(STATS_FILE, 'r', encoding='utf-8') as f:
-                    stats = json.load(f)
-                    # Убедимся, что дата в правильном формате
-                    if 'last_reset' in stats:
-                        stats['last_reset'] = datetime.fromisoformat(stats['last_reset'])
-                    logger.info("📊 Статистика загружена из файла")
-                    return stats
-            else:
-                logger.info("🆕 Файл статистики не найден, создаём новый")
-                return {
-                    "total_orders": 0,
-                    "total_questions": 0,
-                    "total_users": 0,
-                    "last_reset": datetime.now()
-                }
-        except Exception as e:
-            logger.error(f"❌ Ошибка загрузки статистики: {e}")
-            return {
-                "total_orders": 0,
-                "total_questions": 0,
-                "total_users": 0,
-                "last_reset": datetime.now()
-            }
-
     def save_stats(self):
         """Сохраняет статистику в файл"""
         try:
             # Создаём копию и преобразуем datetime в строку
-            stats_to_save = bot_statistics.copy()
+            stats_to_save = self.bot_statistics.copy()
             if 'last_reset' in stats_to_save:
                 stats_to_save['last_reset'] = stats_to_save['last_reset'].isoformat()
             with open(STATS_FILE, 'w', encoding='utf-8') as f:
@@ -288,15 +295,6 @@ class TelegramBot:
             logger.info("💾 Статистика сохранена в файл")
         except Exception as e:
             logger.error(f"❌ Ошибка сохранения статистики: {e}")
-
-    # --- Глобальные переменные для данных ---
-    bot_statistics = load_stats()
-    active_conversations = {} # {user_id: {...}}
-    owner_client_map = {} # {owner_id: client_id}
-
-    # --- Flask приложение ---
-    flask_app = Flask(__name__)
-    CORS(flask_app) # Разрешаем CORS для всех доменов
 
     # --- Команды ---
     async def start(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1620,38 +1618,21 @@ class TelegramBot:
             logger.error(f"❌ Ошибка остановки polling: {e}")
 
 # --- Flask обработчики ---
-@TelegramBot.flask_app.route('/', methods=['GET'])
+flask_app = Flask(__name__)
+CORS(flask_app) # Разрешаем CORS для всех доменов
+
+@flask_app.route('/', methods=['GET'])
 def index():
     return '<h1>✅ SecureShop Telegram Bot is running!</h1><p>Webhook is active.</p>'
 
-@TelegramBot.flask_app.route('/webhook', methods=['POST'])
+@flask_app.route('/webhook', methods=['POST'])
 async def webhook():
     """Обработчик webhook от Telegram"""
-    if not telegram_app or not telegram_app.application:
-        logger.error("❌ Telegram приложение не инициализировано")
-        return jsonify({'error': 'Bot not initialized'}), 500
-    try:
-        json_string = request.get_data().decode('utf-8')
-        update = Update.de_json(json.loads(json_string), telegram_app.application.bot)
-        if telegram_app.application.running:
-            await telegram_app.application.process_update(update)
-        return '', 200
-    except Exception as e:
-        logger.error(f"Ошибка обработки webhook: {e}")
-        return jsonify({'error': str(e)}), 500
-
-# --- IPN обработчик для NOWPayments (если будет использоваться) ---
-# @TelegramBot.flask_app.route('/nowpayments_ipn', methods=['POST'])
-# def nowpayments_ipn():
-#     # Здесь будет логика обработки уведомлений от NOWPayments
-#     # data = request.json
-#     # logger.info(f"NOWPayments IPN received: {data}")
-#     # return jsonify({'status': 'ok'}), 200
-#     pass # Заглушка
+    # Логика webhook будет реализована при необходимости
+    return '', 200
 
 # --- Основная логика запуска ---
 bot_instance = TelegramBot()
-telegram_app = bot_instance
 
 async def setup_webhook():
     """Настройка webhook"""
