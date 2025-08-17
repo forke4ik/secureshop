@@ -776,11 +776,11 @@ class TelegramBot:
 
         # - Логика для /payout -
         elif data.startswith('payout_'):
-            logger.info(f"➡️ Передача callback 'payout_' в существующую логику для пользователя {user_id}")
-            # Проверяем, является ли пользователь основателем
-            if user_id not in [OWNER_ID_1, OWNER_ID_2]:
-                await query.edit_message_text("❌ У вас немає прав для цієї дії.")
-                return
+        logger.info(f"🎯 Начало обработки payout callback: '{data}' от пользователя {user_id}")
+        # Проверяем, является ли пользователь основателем
+        if user_id not in [OWNER_ID_1, OWNER_ID_2]:
+            await query.edit_message_text("❌ У вас немає прав для цієї дії.")
+            return
 
             # Извлекаем данные из контекста
             target_user_id = context.user_data.get('payout_target_user_id')
