@@ -66,7 +66,7 @@ AVAILABLE_CURRENCIES = {
 }
 
 # Реквизиты карты (из оплата.txt)
-CARD_DETAILS = "1234 5678 9012 3456" # Тестовые реквизиты
+CARD_DETAILS = os.getenv("CARD_DETAILS", "5355 2800 4715 6045") # Тестовые реквизиты
 
 # --- Инициализация Flask приложения ---
 flask_app = Flask(__name__)
@@ -298,10 +298,10 @@ class TelegramBot:
         self.application.add_handler(CommandHandler("payout", self.payout_command))
         # Команды для владельцев
         self.application.add_handler(CommandHandler("stats", self.stats_command))
-        self.application.add_handler(CommandHandler("chats", self.show_active_chats)) # Исправлено
-        self.application.add_handler(CommandHandler("history", self.show_conversation_history)) # Исправлено
-        self.application.add_handler(CommandHandler("clear", self.clear_active_chats)) # Исправлено
-        self.application.add_handler(CommandHandler("dialog", self.continue_dialog_command)) # Исправлено
+        self.application.add_handler(CommandHandler("chats", self.show_active_chats))
+        self.application.add_handler(CommandHandler("history", self.show_conversation_history))
+        self.application.add_handler(CommandHandler("clear", self.clear_active_chats))
+        self.application.add_handler(CommandHandler("dialog", self.continue_dialog_command))
 
         # --- Обработчики callback кнопок ---
         # Обработчик callback кнопок оплаты (только для данных, начинающихся с pay_ или payout_)
@@ -369,7 +369,7 @@ class TelegramBot:
 
         # Обновляем статистику
         global bot_statistics
-        if user.id not in [u for u in [OWNER_ID_1, OWNER_ID_2]]: # Простая проверка на новых пользователей
+        if user.id not in [OWNER_ID_1, OWNER_ID_2]:
              bot_statistics['total_users'] += 1
              save_stats()
 
@@ -407,7 +407,7 @@ class TelegramBot:
         # Проверяем активные диалоги
         if user_id in active_conversations:
             await update.message.reply_text(
-                "❗ У вас вже ф активний діалог."
+                "❗ У вас вже є активний діалог."
                 "Будь ласка, продовжуйте писати в поточному діалозі або завершіть його командою /stop, "
                 "якщо хочете почати новий діалог."
             )
@@ -588,28 +588,28 @@ class TelegramBot:
 
     # --- Логика оплаты ---
     async def payment_callback_handler(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Обработчик callback кнопок, связанных с оплатой"""
-    query = update.callback_query
-    await query.answer()
-    user_id = query.from_user.id # ID того, кто нажал кнопку
-    data = query.data
-    logger.info(f"📥 Callback received: data='{data}', from user_id={user_id}")
+        """Обработчик callback кнопок, связанных с оплатой"""
+        query = update.callback_query
+        await query.answer()
+        user_id = query.from_user.id # ID того, кто нажал кнопку
+        data = query.data
+        logger.info(f"📥 Callback received: data='{data}', from user_id={user_id}")
 
-    # - Логика для /pay (для пользователя) -
-    if data.startswith('pay_'):
-        logger.info(f"➡️ Передача callback 'pay_' в существующую логику для пользователя {user_id}")
-        # Проверяем, является ли пользователь основателем
-        if user_id in [OWNER_ID_1, OWNER_ID_2]:
-            await query.edit_message_text("❌ У вас немає прав для цієї дії.")
-            return
+        # - Логика для /pay (для пользователя) -
+        if data.startswith('pay_'):
+            logger.info(f"➡️ Передача callback 'pay_' в существующую логику для пользователя {user_id}")
+            # Проверяем, является ли пользователь основателем
+            if user_id in [OWNER_ID_1, OWNER_ID_2]:
+                await query.edit_message_text("❌ У вас немає прав для цієї дії.")
+                return
 
-        # Проверяем, есть ли сумма в контексте
-        usd_amount = context.user_data.get('payment_amount_usd')
-        order_details = context.user_data.get('order_details_for_payment')
-        if not usd_amount or not order_details:
-            await query.edit_message_text("❌ Помилка: інформація про платіж втрачена. Спробуйте ще раз.")
-            logger.error(f"⚠️ Данные pay потеряны для пользователя {user_id}")
-            return
+            # Проверяем, есть ли сумма в контексте
+            usd_amount = context.user_data.get('payment_amount_usd')
+            order_details = context.user_data.get('order_details_for_payment')
+            if not usd_amount or not order_details:
+                await query.edit_message_text("❌ Помилка: інформація про платіж втрачена. Спробуйте ще раз.")
+                logger.error(f"⚠️ Данные pay потеряны для пользователя {user_id}")
+                return
 
             # - Оплата карткой -
             if data == 'pay_card':
@@ -774,13 +774,13 @@ class TelegramBot:
                 await self.request_account_data(update, context)
                 logger.info(f"✅ Ручное подтверждение оплаты pay для пользователя {user_id}")
 
-        # - Логика для /payout -
+        # - Логика для /payout (для основателя) -
         elif data.startswith('payout_'):
-        logger.info(f"🎯 Начало обработки payout callback: '{data}' от пользователя {user_id}")
-        # Проверяем, является ли пользователь основателем
-        if user_id not in [OWNER_ID_1, OWNER_ID_2]:
-            await query.edit_message_text("❌ У вас немає прав для цієї дії.")
-            return
+            logger.info(f"🎯 Начало обработки payout callback: '{data}' от пользователя {user_id}")
+            # Проверяем, является ли пользователь основателем
+            if user_id not in [OWNER_ID_1, OWNER_ID_2]:
+                await query.edit_message_text("❌ У вас немає прав для цієї дії.")
+                return
 
             # Извлекаем данные из контекста
             target_user_id = context.user_data.get('payout_target_user_id')
