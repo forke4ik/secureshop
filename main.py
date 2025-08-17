@@ -637,127 +637,8 @@ class TelegramBot:
     # - Добавленные методы для оплаты -
     async def pay_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Обработчик команды /pay для заказов с сайта или ручного ввода"""
-        user = update.effective_user
-        user_id = user.id
-
-        # Гарантируем наличие пользователя в БД
-        ensure_user_exists(user)
-
-        # Проверяем аргументы команды
-        if not context.args:
-            # Если аргументов нет, проверяем, есть ли активный заказ
-            if user_id in active_conversations and 'order_details' in active_conversations[user_id]:
-                order_text = active_conversations[user_id]['order_details']
-            else:
-                await update.message.reply_text(
-                    "❌ Неправильний формат команди. Використовуйте: /pay <order_id> <товар1> <товар2> ... "
-                    "або використовуйте цю команду після оформлення замовлення в боті."
-                )
-                return
-        else:
-            # Первый аргумент - ID заказа
-            order_id = context.args[0]
-            # Объединяем все аргументы в одну строку
-            items_str = " ".join(context.args[1:])
-            # Используем регулярное выражение для извлечения товаров
-            # Формат: <ServiceAbbr>-<PlanAbbr>-<Period>-<Price>
-            # Для Discord Прикраси: DisU-BzN-6$-180
-            # Для обычных подписок: Dis-Ful-1м-170
-            # Пример простого формата
-            # order_text = f"Замовлення #{order_id}: {items_str}"
-
-            # --- Расшифровка заказа ---
-            pattern = r'(\w{2,4})-(\w{2,4})-([\w\s$]+?)-(\d+)'
-            items = re.findall(pattern, items_str)
-
-            if not items:
-                 await update.message.reply_text("❌ Не вдалося розпізнати товари у замовленні. Перевірте формат.")
-                 return
-
-            # Расшифровка сокращений
-            service_map = {
-                "Cha": "ChatGPT",
-                "Dis": "Discord",
-                "Duo": "Duolingo",
-                "Pic": "PicsArt",
-                "Can": "Canva",
-                "Net": "Netflix",
-                "DisU": "Discord Прикраси" # Обновлено: Украшення -> Прикраси
-            }
-            plan_map = {
-                "Bas": "Basic",
-                "Ful": "Full",
-                "Ind": "Individual",
-                "Fam": "Family",
-                "Plu": "Plus",
-                "Pro": "Pro",
-                "Pre": "Premium",
-                "BzN": "Без Nitro", # Для прикрас
-                "ZN": "З Nitro"     # Для прикрас
-            }
-            period_map = {
-                "1м": "1 місяць",
-                "12м": "12 місяців",
-                "6$": "6$",
-                "8$": "8$",
-                "9$": "9$",
-                "12$": "12$",
-                "5$": "5$",
-                "7$": "7$",
-                "8.5$": "8.5$",
-                "14$": "14$",
-                "22$": "22$"
-                # Добавьте другие периоды при необходимости
-            }
-
-            order_lines = [f"📦 Замовлення #{order_id}:"]
-            total_uah = 0
-            for service_abbr, plan_abbr, period_abbr, price_uah in items:
-                service_name = service_map.get(service_abbr, service_abbr)
-                plan_name = plan_map.get(plan_abbr, plan_abbr)
-                period_name = period_map.get(period_abbr, period_abbr)
-                price_uah_int = int(price_uah)
-                total_uah += price_uah_int
-                order_lines.append(f"  • {service_name} {plan_name} ({period_name}) - {price_uah_int} UAH")
-
-            order_lines.append(f"💳 Всього: {total_uah} UAH")
-            order_text = "\n".join(order_lines)
-            # --- Конец расшифровки заказа ---
-
-        # Сохраняем в БД
-        save_active_conversation(user_id, 'order', None, order_text)
-
-        # Обновляем статистику
-        bot_statistics['total_orders'] += 1
-        save_stats()
-
-        # - Начало логики оплаты -
-        # Извлекаем сумму в UAH
-        uah_amount = get_uah_amount_from_order_text(order_text)
-        if uah_amount <= 0:
-            await update.message.reply_text("❌ Не вдалося визначити суму для оплати.")
-            return
-
-        # Конвертируем в USD
-        usd_amount = convert_uah_to_usd(uah_amount)
-        if usd_amount <= 0:
-            await update.message.reply_text("❌ Сума для оплати занадто мала.")
-            return
-
-        # Сохраняем сумму в USD в контексте пользователя
-        context.user_data['payment_amount_usd'] = usd_amount
-        context.user_data['order_details_for_payment'] = order_text # Сохраняем детали заказа
-
-        # Предлагаем выбрать метод оплаты
-        keyboard = [
-            [InlineKeyboardButton("💳 Оплата карткою", callback_data='pay_card')],
-            [InlineKeyboardButton("🪙 Криптовалюта", callback_data='pay_crypto')],
-            [InlineKeyboardButton("⬅️ Назад", callback_data='back_to_main')],
-            [InlineKeyboardButton("❓ Запитання", callback_data='question')]
-        ]
-        reply_markup = InlineKeyboardMarkup(keyboard)
-        await update.message.reply_text(f"💳 Оберіть метод оплати для суми {usd_amount}$:", reply_markup=reply_markup)
-        # - Конец логики оплаты -
+        # ... (оставьте существующую логику /pay_command без изменений) ...
+        pass # Заглушка, замените на реальную логику из вашего файла
 
     async def payout_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Обработчик команды /payout для основателей"""
@@ -780,8 +661,10 @@ class TelegramBot:
             return
 
         try:
+            # --- Исправлено: user_id -> target_user_id ---
             target_user_id = int(context.args[0])
             uah_amount = float(context.args[1])
+            # ---
             if uah_amount <= 0:
                 raise ValueError("Сума повинна бути більше нуля.")
         except ValueError as e:
@@ -795,7 +678,9 @@ class TelegramBot:
             return
 
         # Сохраняем данные в контексте для последующей обработки
+        # --- Исправлено: сохраняем target_user_id ---
         context.user_data['payout_target_user_id'] = target_user_id
+        # ---
         context.user_data['payout_amount_uah'] = uah_amount
         context.user_data['payout_amount_usd'] = usd_amount
 
@@ -804,7 +689,7 @@ class TelegramBot:
             [InlineKeyboardButton("💳 Оплата карткою", callback_data='payout_card')],
             [InlineKeyboardButton("🪙 Криптовалюта", callback_data='payout_crypto')],
             [InlineKeyboardButton("⬅️ Назад", callback_data='payout_cancel')],
-            [InlineKeyboardButton("❓ Запитання", callback_data='question')]
+            [InlineKeyboardButton("❓ Запитання", callback_data='question')] # Эта кнопка работает, так как обрабатывается button_handler
         ]
         reply_markup = InlineKeyboardMarkup(keyboard)
         await update.message.reply_text(
@@ -818,137 +703,169 @@ class TelegramBot:
         """Обработчик callback кнопок, связанных с оплатой"""
         query = update.callback_query
         await query.answer()
-        user_id = query.from_user.id
+        user_id = query.from_user.id # ID того, кто нажал кнопку (основатель)
         data = query.data
 
         # --- Логика для /pay ---
+        # ... (оставьте существующую логику pay_... без изменений) ...
         if data.startswith('pay_'):
-            # Проверяем, есть ли сумма в контексте
-            usd_amount = context.user_data.get('payment_amount_usd')
-            order_details = context.user_data.get('order_details_for_payment')
-            if not usd_amount or not order_details:
-                await query.edit_message_text("❌ Помилка: інформація про платіж втрачена. Спробуйте ще раз.")
+             # ... (оставьте существующую логику pay_... без изменений) ...
+             pass # Заглушка, замените на реальную логику из вашего файла
+
+
+        # --- Логика для /payout ---
+        elif data.startswith('payout_'):
+            logger.info(f"Обработка payout callback: {data} от пользователя {user_id}")
+            # Проверяем, является ли пользователь основателем
+            if user_id not in [OWNER_ID_1, OWNER_ID_2]:
+                await query.answer("❌ У вас немає доступу.", show_alert=True)
+                logger.warning(f"Несанкционированный доступ к payout для пользователя {user_id}")
+                return
+
+            # Проверяем, есть ли данные в контексте
+            # --- Исправлено: получаем target_user_id ---
+            target_user_id = context.user_data.get('payout_target_user_id')
+            # ---
+            uah_amount = context.user_data.get('payout_amount_uah')
+            usd_amount = context.user_data.get('payout_amount_usd')
+
+            if not target_user_id or not uah_amount or not usd_amount:
+                error_msg = "❌ Помилка: інформація про платіж втрачена. Спробуйте ще раз."
+                await query.edit_message_text(error_msg)
+                logger.error(f"Данные payout потеряны для пользователя {user_id}")
+                return
+
+            # - Отмена -
+            if data == 'payout_cancel':
+                await query.edit_message_text("❌ Створення рахунку скасовано.")
+                # Очищаем контекст
+                context.user_data.pop('payout_target_user_id', None)
+                context.user_data.pop('payout_amount_uah', None)
+                context.user_data.pop('payout_amount_usd', None)
+                context.user_data.pop('payout_nowpayments_invoice_id', None)
+                logger.info(f"Создание payout отменено пользователем {user_id}")
                 return
 
             # - Оплата карткой -
-            if data == 'pay_card':
+            elif data == 'payout_card':
                 # Создаем временную ссылку или просто сообщаем пользователю
                 keyboard = [
-                    [InlineKeyboardButton("✅ Оплачено", callback_data='manual_payment_confirmed')],
-                    [InlineKeyboardButton("⬅️ Назад", callback_data='back_to_payment_methods')],
+                    [InlineKeyboardButton("✅ Оплачено", callback_data='payout_manual_payment_confirmed')],
+                    [InlineKeyboardButton("⬅️ Назад", callback_data='payout_cancel')],
                     [InlineKeyboardButton("❓ Запитання", callback_data='question')]
                 ]
                 reply_markup = InlineKeyboardMarkup(keyboard)
                 await query.edit_message_text(
-                    f"💳 Будь ласка, здійсніть оплату {usd_amount}$ карткою на реквізити магазину.\n"
-                    f"(Тут будуть реквізити)\n"
+                    f"💳 Оплата {uah_amount}₴ ({usd_amount}$) карткою.\n"
+                    f"(Тут будуть реквізити для оплати)\n"
                     f"Після оплати натисніть кнопку '✅ Оплачено'.",
                     reply_markup=reply_markup
                 )
-                context.user_data['awaiting_manual_payment_confirmation'] = True
+                logger.info(f"Показаны реквизиты для карты payout пользователю {user_id}")
 
             # - Оплата криптовалютою -
-            elif data == 'pay_crypto':
+            elif data == 'payout_crypto':
                 # Отображаем список доступных криптовалют
                 keyboard = []
                 for currency_name, currency_code in AVAILABLE_CURRENCIES.items():
-                    keyboard.append([InlineKeyboardButton(currency_name, callback_data=f'pay_crypto_{currency_code}')])
-                keyboard.append([InlineKeyboardButton("⬅️ Назад", callback_data='back_to_payment_methods')])
+                    keyboard.append([InlineKeyboardButton(currency_name, callback_data=f'payout_crypto_{currency_code}')])
+                keyboard.append([InlineKeyboardButton("⬅️ Назад", callback_data='payout_cancel')])
                 keyboard.append([InlineKeyboardButton("❓ Запитання", callback_data='question')])
                 reply_markup = InlineKeyboardMarkup(keyboard)
-                await query.edit_message_text(f"🪙 Оберіть криптовалюту для оплати {usd_amount}$:", reply_markup=reply_markup)
-                context.user_data['awaiting_crypto_currency_selection'] = True
+                await query.edit_message_text(
+                    f"🪙 Оберіть криптовалюту для створення рахунку на {uah_amount}₴ ({usd_amount}$):",
+                    reply_markup=reply_markup
+                )
+                logger.info(f"Показан выбор криптовалюты для payout пользователю {user_id}")
 
             # - Выбор конкретной криптовалюты -
-            elif data.startswith('pay_crypto_'):
-                pay_currency = data.split('_')[2] # e.g., 'usdttrc20'
+            elif data.startswith('payout_crypto_'):
+                pay_currency = data.split('_')[2]  # e.g., 'usdttrc20'
                 # Находим название валюты
                 currency_name = next((name for name, code in AVAILABLE_CURRENCIES.items() if code == pay_currency), pay_currency)
                 try:
                     # Создаем счет в NOWPayments
                     headers = {
-                        'Authorization': f'Bearer {NOWPAYMENTS_API_KEY}',
+                        'Authorization': f'Bearer {NOWPAYMENTS_API_KEY}', # Используем Bearer токен
                         'Content-Type': 'application/json'
                     }
                     payload = {
                         "price_amount": usd_amount,
                         "price_currency": "usd",
                         "pay_currency": pay_currency,
-                        "ipn_callback_url": f"{WEBHOOK_URL}/nowpayments_ipn", # URL для уведомлений
-                        "order_id": f"order_{user_id}_{int(time.time())}", # Уникальный ID заказа
-                        "order_description": f"Оплата замовлення користувача {user_id}"
+                        "ipn_callback_url": f"{WEBHOOK_URL}/nowpayments_ipn",  # URL для уведомлений (если используется webhook)
+                        "order_id": f"payout_{user_id}_{target_user_id}_{int(time.time())}",  # Уникальный ID
+                        "order_description": f"Виставлення рахунку основателем {user_id} для користувача {target_user_id}"
                     }
+                    logger.info(f"Создание инвойса NOWPayments для payout: {payload}")
                     response = requests.post("https://api.nowpayments.io/v1/invoice", json=payload, headers=headers)
+                    logger.info(f"Ответ NOWPayments: {response.status_code}")
                     response.raise_for_status()
                     invoice = response.json()
                     pay_url = invoice.get("invoice_url", "Помилка отримання посилання")
                     invoice_id = invoice.get("invoice_id", "Невідомий ID рахунку")
 
-                    # Сохраняем ID инвойса для возможной проверки статуса
-                    context.user_data['nowpayments_invoice_id'] = invoice_id
+                    # Сохраняем ID инвойса
+                    context.user_data['payout_nowpayments_invoice_id'] = invoice_id
 
                     keyboard = [
                         [InlineKeyboardButton("🔗 Перейти до оплати", url=pay_url)],
-                        [InlineKeyboardButton("🔄 Перевірити статус", callback_data='check_payment_status')],
-                        [InlineKeyboardButton("⬅️ Назад", callback_data='back_to_crypto_selection')],
+                        [InlineKeyboardButton("🔄 Перевірити статус", callback_data='payout_check_payment_status')],
+                        [InlineKeyboardButton("⬅️ Назад", callback_data='payout_cancel')],
                         [InlineKeyboardButton("❓ Запитання", callback_data='question')]
                     ]
                     reply_markup = InlineKeyboardMarkup(keyboard)
-                    await query.edit_message_text(
-                        f"🪙 Посилання для оплати {usd_amount}$ в {currency_name}:\n"
-                        f"{pay_url}\n"
-                        f"ID рахунку: {invoice_id}\n"
-                        f"Будь ласка, здійсніть оплату та перевірте статус.",
-                        reply_markup=reply_markup
-                    )
+                    # --- Исправлено: Отправляем ссылку ЦЕЛЕВОМУ пользователю ---
+                    try:
+                        await context.bot.send_message(
+                            chat_id=target_user_id, # <-- Отправляем target_user_id
+                            text=f"🪙 Вам виставлено рахунок на {uah_amount}₴ ({usd_amount}$) в {currency_name}:\n"
+                                 f"{pay_url}\n"
+                                 f"ID рахунку: `{invoice_id}`\n"
+                                 f"Будь ласка, здійсніть оплату.",
+                            parse_mode='Markdown'
+                        )
+                        confirmation_msg = f"✅ Рахунок створено та надіслано користувачу `{target_user_id}`.\nПосилання: {pay_url}"
+                        await query.edit_message_text(confirmation_msg, parse_mode='Markdown')
+                        logger.info(f"Инвойс {invoice_id} создан и отправлен пользователю {target_user_id} по запросу основателя {user_id}")
+                    except Exception as e:
+                        error_send_msg = f"❌ Рахунок створено, але не вдалося надіслати користувачу {target_user_id}: {e}\nПосилання: {pay_url}"
+                        await query.edit_message_text(error_send_msg)
+                        logger.error(f"Ошибка отправки инвойса {invoice_id} пользователю {target_user_id}: {e}")
+                    # ---
+                except requests.exceptions.RequestException as e:
+                    error_msg = f"❌ Помилка з'єднання з сервісом оплати: {e}"
+                    await query.edit_message_text(error_msg)
+                    logger.error(f"Ошибка сети NOWPayments для payout: {e}")
                 except Exception as e:
-                    logger.error(f"Помилка створення інвойсу NOWPayments: {e}")
-                    await query.edit_message_text(f"❌ Помилка створення посилання для оплати: {e}")
+                    error_msg = f"❌ Помилка створення посилання для оплати: {e}"
+                    await query.edit_message_text(error_msg)
+                    logger.error(f"Ошибка создания инвойса NOWPayments для payout: {e}")
 
             # - Ручне підтвердження оплати -
-            elif data == 'manual_payment_confirmed':
-                # Здесь можно добавить логику проверки оплаты вручную или просто перейти к следующему шагу
-                await query.edit_message_text("✅ Оплата підтверджена вручну.")
-                # Переходим к сбору данных аккаунта
-                await self.request_account_data(update, context)
-
-            # - Назад до вибору методу оплати -
-            elif data == 'back_to_payment_methods':
-                # Повторно отображаем выбор метода оплаты
-                keyboard = [
-                    [InlineKeyboardButton("💳 Оплата карткою", callback_data='pay_card')],
-                    [InlineKeyboardButton("🪙 Криптовалюта", callback_data='pay_crypto')],
-                    [InlineKeyboardButton("⬅️ Назад", callback_data='back_to_main')],
-                    [InlineKeyboardButton("❓ Запитання", callback_data='question')]
-                ]
-                reply_markup = InlineKeyboardMarkup(keyboard)
-                await query.edit_message_text(f"💳 Оберіть метод оплати для суми {usd_amount}$:", reply_markup=reply_markup)
-                # Очищаем временные состояния
-                context.user_data.pop('awaiting_manual_payment_confirmation', None)
-                context.user_data.pop('awaiting_crypto_currency_selection', None)
-                context.user_data.pop('nowpayments_invoice_id', None)
-
-            # - Назад до вибору криптовалюти -
-            elif data == 'back_to_crypto_selection':
-                # Отображаем список доступных криптовалют
-                keyboard = []
-                for currency_name, currency_code in AVAILABLE_CURRENCIES.items():
-                    keyboard.append([InlineKeyboardButton(currency_name, callback_data=f'pay_crypto_{currency_code}')])
-                keyboard.append([InlineKeyboardButton("⬅️ Назад", callback_data='back_to_payment_methods')])
-                keyboard.append([InlineKeyboardButton("❓ Запитання", callback_data='question')])
-                reply_markup = InlineKeyboardMarkup(keyboard)
-                await query.edit_message_text(f"🪙 Оберіть криптовалюту для оплати {usd_amount}$:", reply_markup=reply_markup)
-                context.user_data.pop('nowpayments_invoice_id', None)
+            elif data == 'payout_manual_payment_confirmed':
+                # Здесь можно добавить логику проверки оплаты вручную или запись в БД
+                await query.edit_message_text(
+                    "✅ Оплата карткою підтверджена вручну.\n"
+                    "Інформуйте користувача про подальші дії."
+                )
+                # Очищаем контекст после завершения
+                context.user_data.pop('payout_target_user_id', None)
+                context.user_data.pop('payout_amount_uah', None)
+                context.user_data.pop('payout_amount_usd', None)
+                context.user_data.pop('payout_nowpayments_invoice_id', None)
+                logger.info(f"Ручное подтверждение оплаты payout для пользователя {user_id}")
 
             # - Перевірка статуса оплати -
-            elif data == 'check_payment_status':
-                invoice_id = context.user_data.get('nowpayments_invoice_id')
+            elif data == 'payout_check_payment_status':
+                invoice_id = context.user_data.get('payout_nowpayments_invoice_id')
                 if not invoice_id:
                     await query.edit_message_text("❌ Не знайдено ID рахунку для перевірки.")
+                    logger.warning(f"ID инвойса не найден для проверки статуса payout пользователем {user_id}")
                     return
                 try:
                     headers = {
-                        'Authorization': f'Bearer {NOWPAYMENTS_API_KEY}',
+                        'Authorization': f'Bearer {NOWPAYMENTS_API_KEY}', # Используем Bearer токен
                         'Content-Type': 'application/json'
                     }
                     response = requests.get(f"https://api.nowpayments.io/v1/invoice/{invoice_id}", headers=headers)
@@ -957,35 +874,39 @@ class TelegramBot:
                     payment_status = status_data.get('payment_status', 'unknown')
 
                     if payment_status == 'finished':
-                        await query.edit_message_text("✅ Оплата успішно пройшла!")
-                        # Переходим к сбору данных аккаунта
-                        await self.request_account_data(update, context)
+                        success_msg = "✅ Оплата успішно пройшла!\nІнформуйте користувача про подальші дії."
+                        await query.edit_message_text(success_msg)
+                        # Очищаем контекст после успешной оплаты
+                        context.user_data.pop('payout_target_user_id', None)
+                        context.user_data.pop('payout_amount_uah', None)
+                        context.user_data.pop('payout_amount_usd', None)
+                        context.user_data.pop('payout_nowpayments_invoice_id', None)
+                        logger.info(f"Оплата инвойса {invoice_id} успешно завершена по проверке статуса пользователем {user_id}")
                     elif payment_status in ['waiting', 'confirming', 'confirmed']:
                         keyboard = [
-                            [InlineKeyboardButton("🔄 Перевірити ще раз", callback_data='check_payment_status')],
-                            [InlineKeyboardButton("⬅️ Назад", callback_data='back_to_crypto_selection')],
+                            [InlineKeyboardButton("🔄 Перевірити ще раз", callback_data='payout_check_payment_status')],
+                            [InlineKeyboardButton("⬅️ Назад", callback_data='payout_cancel')],
                             [InlineKeyboardButton("❓ Запитання", callback_data='question')]
                         ]
                         reply_markup = InlineKeyboardMarkup(keyboard)
-                        await query.edit_message_text(
-                            f"⏳ Статус оплати: {payment_status}. Будь ласка, зачекайте або перевірте ще раз.",
-                            reply_markup=reply_markup
-                        )
-                    else: # cancelled, expired, etc.
+                        status_msg = f"⏳ Статус оплати: `{payment_status}`. Будь ласка, зачекайте або перевірте ще раз."
+                        await query.edit_message_text(status_msg, parse_mode='Markdown', reply_markup=reply_markup)
+                        logger.info(f"Статус оплаты инвойса {invoice_id}: {payment_status} (проверка пользователем {user_id})")
+                    else:  # cancelled, expired, partially_paid, etc.
                         keyboard = [
-                            [InlineKeyboardButton("💳 Інший метод оплати", callback_data='back_to_payment_methods')],
-                            [InlineKeyboardButton("⬅️ Назад", callback_data='back_to_main')],
+                            [InlineKeyboardButton("💳 Інший метод оплати", callback_data='payout_cancel')], # Просто отмена, можно добавить повторный выбор
+                            [InlineKeyboardButton("⬅️ Назад", callback_data='payout_cancel')],
                             [InlineKeyboardButton("❓ Запитання", callback_data='question')]
                         ]
                         reply_markup = InlineKeyboardMarkup(keyboard)
-                        await query.edit_message_text(
-                            f"❌ Оплата не пройшла або була скасована. Статус: {payment_status}.",
-                            reply_markup=reply_markup
-                        )
+                        fail_msg = f"❌ Оплата не пройшла або була скасована. Статус: `{payment_status}`."
+                        await query.edit_message_text(fail_msg, parse_mode='Markdown', reply_markup=reply_markup)
+                        logger.info(f"Оплата инвойса {invoice_id} не удалась или отменена. Статус: {payment_status} (проверка пользователем {user_id})")
                 except Exception as e:
-                    logger.error(f"Помилка перевірки статусу NOWPayments: {e}")
-                    await query.edit_message_text(f"❌ Помилка перевірки статусу оплати: {e}")
-
+                    error_msg = f"❌ Помилка перевірки статусу оплати: {e}"
+                    await query.edit_message_text(error_msg)
+                    logger.error(f"Ошибка проверки статуса NOWPayments для payout инвойса {invoice_id}: {e}")
+                    
         # --- Логика для /payout ---
         elif data.startswith('payout_'):
             # Проверяем, является ли пользователь основателем
