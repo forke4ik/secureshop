@@ -1,4 +1,4 @@
-# main.py (обновленный с интеграцией /payout и исправлениями)
+# main.py (обновленный с интеграцией /payout, исправлениями и недостающими функциями)
 import logging
 import os
 import asyncio
@@ -6,83 +6,212 @@ import threading
 import time
 import json
 import re
+import requests
 from datetime import datetime
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, User, BotCommandScopeChat, BotCommandScopeDefault
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, User, BotCommandScopeChat, BotCommandScopeDefault, InputFile
 from telegram.ext import Application, CommandHandler, MessageHandler, CallbackQueryHandler, filters, ContextTypes
-from telegram.error import Conflict
+from telegram.error import Conflict, BadRequest
 from flask import Flask, request, jsonify
 from flask_cors import CORS
 import psycopg
 from psycopg.rows import dict_row
-import requests # Добавлено для интеграции NOWPayments
 
-# Настройка логирования
-logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO)
+# --- Настройки логирования ---
+logging.basicConfig(
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    level=logging.INFO
+)
 logger = logging.getLogger(__name__)
 
-# Глобальные переменные состояния
-bot_running = False
-bot_lock = threading.Lock()
+# --- Конфигурация ---
+# Токен бота
+BOT_TOKEN = os.getenv("BOT_TOKEN")
+if not BOT_TOKEN:
+    raise ValueError("BOT_TOKEN не установлен в переменных окружения")
 
-# Конфигурация из переменных окружения
-BOT_TOKEN = os.getenv('BOT_TOKEN')
-OWNER_ID_1 = 7106925462 # @HiGki2pYYY
-OWNER_ID_2 = 6279578957 # @oc33t
-PORT = int(os.getenv('PORT', 8443))
-WEBHOOK_URL = os.getenv('WEBHOOK_URL')
-USE_POLLING = os.getenv('USE_POLLING', 'true').lower() == 'true'
-DATABASE_URL = os.getenv('DATABASE_URL')
-PING_INTERVAL = int(os.getenv('PING_INTERVAL', 840)) # 14 минут
+# URL вебхука (если используется webhook)
+WEBHOOK_URL = os.getenv("WEBHOOK_URL") # Например: https://yourdomain.com/webhook
+WEBHOOK_PORT = int(os.getenv("PORT", "8443")) # Порт, который слушает Flask
 
-# - Добавленные/обновлённые переменные окружения для оплаты -
-NOWPAYMENTS_API_KEY = os.getenv('NOWPAYMENTS_API_KEY')
-EXCHANGE_RATE_UAH_TO_USD = float(os.getenv('EXCHANGE_RATE_UAH_TO_USD', 41.26))
+# URL базы данных PostgreSQL
+DATABASE_URL = os.getenv("DATABASE_URL")
+if not DATABASE_URL:
+    raise ValueError("DATABASE_URL не установлен в переменных окружения")
 
-# Доступные криптовалюты для NOWPayments (из оплата.txt)
+# ID основателей (администраторов)
+OWNER_ID_1 = int(os.getenv("OWNER_ID_1"))
+OWNER_ID_2 = int(os.getenv("OWNER_ID_2"))
+
+# Использовать polling или webhook
+USE_POLLING = os.getenv("USE_POLLING", "True").lower() == "true"
+
+# NOWPayments API
+NOWPAYMENTS_API_KEY = os.getenv("NOWPAYMENTS_API_KEY")
+if not NOWPAYMENTS_API_KEY:
+    raise ValueError("NOWPAYMENTS_API_KEY не установлен в переменных окружения")
+
+# Курсы валют
+EXCHANGE_RATE_UAH_TO_USD = 41.0 # Примерный курс, можно заменить на динамический
+
+# Доступные криптовалюты для NOWPayments
 AVAILABLE_CURRENCIES = {
-    "USDT (Solana)": "usdtsol",
+    "Bitcoin (BTC)": "btc",
+    "Ethereum (ETH)": "eth",
+    "Litecoin (LTC)": "ltc",
+    "BNB (BNB)": "bnb",
     "USDT (TRC20)": "usdttrc20",
-    "ETH": "eth",
-    "USDT (Arbitrum)": "usdtarb",
-    "USDT (Polygon)": "usdtmatic",
-    "USDT (TON)": "usdtton",
-    "AVAX (C-Chain)": "avax",
-    "APTOS (APT)": "apt"
+    "USDC (ERC20)": "usdcerc20"
 }
-# - Конец добавленных переменных -
 
-# Путь к файлу с данными
-STATS_FILE = "bot_stats.json"
-
-# Оптимизация: буферизация запросов к БД
-BUFFER_FLUSH_INTERVAL = 300 # 5 минут
-BUFFER_MAX_SIZE = 50
-message_buffer = []
-active_conv_buffer = []
-
-# Оптимизация: кэш пользователей и истории
-user_cache = set()
-history_cache = {}
-
-# Глобальные переменные для статистики и активных диалогов
-bot_statistics = {
-    'total_users': 0,
-    'total_orders': 0,
-    'total_questions': 0,
-    'last_reset': datetime.now().isoformat()
-}
-active_conversations = {}
-owner_client_map = {}
-
-# Глобальные переменные для приложения
-telegram_app = None
+# --- Инициализация Flask приложения ---
 flask_app = Flask(__name__)
 CORS(flask_app) # Разрешаем CORS для всех доменов
 
-# - Добавленные/обновлённые вспомогательные функции -
+# --- Глобальные переменные ---
+bot_statistics = {'total_users': 0, 'total_orders': 0, 'total_questions': 0, 'last_reset': datetime.now().isoformat()}
+active_conversations = {}
+owner_client_map = {}
+telegram_app = None
+bot_running = False
+
+# --- Вспомогательные функции для работы с БД ---
+def get_db_connection():
+    """Создает и возвращает соединение с БД."""
+    return psycopg.connect(DATABASE_URL, row_factory=dict_row)
+
+def init_db():
+    """Инициализирует структуру базы данных."""
+    try:
+        with get_db_connection() as conn:
+            with conn.cursor() as cur:
+                # Создание таблицы пользователей
+                cur.execute("""
+                    CREATE TABLE IF NOT EXISTS users (
+                        id BIGINT PRIMARY KEY,
+                        first_name TEXT,
+                        last_name TEXT,
+                        username TEXT,
+                        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                        last_active TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                    )
+                """)
+                # Создание таблицы активных диалогов
+                cur.execute("""
+                    CREATE TABLE IF NOT EXISTS active_conversations (
+                        user_id BIGINT PRIMARY KEY REFERENCES users(id),
+                        type TEXT NOT NULL, -- 'question', 'subscription_order', 'digital_order'
+                        assigned_owner BIGINT REFERENCES users(id),
+                        last_message TEXT,
+                        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                    )
+                """)
+                # Создание таблицы истории сообщений
+                cur.execute("""
+                    CREATE TABLE IF NOT EXISTS message_history (
+                        id SERIAL PRIMARY KEY,
+                        user_id BIGINT REFERENCES users(id),
+                        message TEXT NOT NULL,
+                        is_from_user BOOLEAN NOT NULL,
+                        timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                    )
+                """)
+                # Создание таблицы статистики (одна строка)
+                cur.execute("""
+                    CREATE TABLE IF NOT EXISTS bot_stats (
+                        id INTEGER PRIMARY KEY DEFAULT 1,
+                        data JSONB NOT NULL
+                    )
+                """)
+                # Вставка начальной строки статистики, если её нет
+                cur.execute("INSERT INTO bot_stats (id, data) VALUES (1, %s) ON CONFLICT (id) DO NOTHING", (json.dumps(bot_statistics),))
+            conn.commit()
+        logger.info("✅ База данных инициализирована")
+    except Exception as e:
+        logger.error(f"❌ Ошибка инициализации БД: {e}")
+
+def ensure_user_exists(user: User):
+    """Гарантирует, что пользователь существует в БД."""
+    try:
+        with get_db_connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    INSERT INTO users (id, first_name, last_name, username)
+                    VALUES (%s, %s, %s, %s)
+                    ON CONFLICT (id) DO UPDATE SET
+                        first_name = EXCLUDED.first_name,
+                        last_name = EXCLUDED.last_name,
+                        username = EXCLUDED.username,
+                        last_active = CURRENT_TIMESTAMP
+                """, (user.id, user.first_name, user.last_name, user.username))
+            conn.commit()
+        logger.debug(f"👤 Пользователь {user.id} гарантирован в БД")
+    except Exception as e:
+        logger.error(f"❌ Ошибка ensure_user_exists для {user.id}: {e}")
+
+def save_active_conversation(user_id, conversation_type, assigned_owner, last_message):
+    """Сохраняет или обновляет активный диалог в БД."""
+    try:
+        with get_db_connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    INSERT INTO active_conversations (user_id, type, assigned_owner, last_message, updated_at)
+                    VALUES (%s, %s, %s, %s, CURRENT_TIMESTAMP)
+                    ON CONFLICT (user_id) DO UPDATE SET
+                        type = EXCLUDED.type,
+                        assigned_owner = EXCLUDED.assigned_owner,
+                        last_message = EXCLUDED.last_message,
+                        updated_at = CURRENT_TIMESTAMP
+                """, (user_id, conversation_type, assigned_owner, last_message))
+            conn.commit()
+        logger.debug(f"💾 Активный диалог для {user_id} сохранен в БД")
+    except Exception as e:
+        logger.error(f"❌ Ошибка save_active_conversation для {user_id}: {e}")
+
+def save_message(user_id, message_text, is_from_user):
+    """Сохраняет сообщение в историю."""
+    try:
+        with get_db_connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    INSERT INTO message_history (user_id, message, is_from_user, timestamp)
+                    VALUES (%s, %s, %s, CURRENT_TIMESTAMP)
+                """, (user_id, message_text, is_from_user))
+            conn.commit()
+        logger.debug(f"💾 Сообщение от {user_id} сохранено в БД")
+    except Exception as e:
+        logger.error(f"❌ Ошибка save_message для {user_id}: {e}")
+
+def load_stats():
+    """Загружает статистику из БД."""
+    global bot_statistics
+    try:
+        with get_db_connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute("SELECT data FROM bot_stats WHERE id = 1")
+                row = cur.fetchone()
+                if row:
+                    bot_statistics = row['data']
+                    logger.debug("📈 Статистика загружена из БД")
+                else:
+                    logger.warning("⚠️ Статистика не найдена в БД, используются значения по умолчанию")
+    except Exception as e:
+        logger.error(f"❌ Ошибка загрузки статистики: {e}")
+
+def save_stats():
+    """Сохраняет статистику в БД."""
+    try:
+        with get_db_connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute("UPDATE bot_stats SET data = %s WHERE id = 1", (json.dumps(bot_statistics),))
+            conn.commit()
+        logger.debug("💾 Статистика сохранена в БД")
+    except Exception as e:
+        logger.error(f"❌ Ошибка сохранения статистики: {e}")
+
 def get_uah_amount_from_order_text(order_text: str) -> float:
     """Извлекает сумму в UAH из текста заказа."""
-    match = re.search(r'💳 Всього: (\d+(?:\.\d+)?) UAH', order_text) # Улучшен regex для дробных чисел
+    match = re.search(r'💳 Всього: (\d+(?:\.\d+)?) UAH', order_text)
     if match:
         return float(match.group(1))
     return 0.0
@@ -93,389 +222,114 @@ def convert_uah_to_usd(uah_amount: float) -> float:
         return 0.0
     return round(uah_amount / EXCHANGE_RATE_UAH_TO_USD, 2)
 
-def load_stats():
-    """Загружает статистику из файла"""
+# --- NOWPayments API ---
+async def create_nowpayments_invoice(amount: float, currency_in: str = 'usd', currency_out: str = 'btc') -> dict:
+    """Создает инвойс в NOWPayments."""
+    url = "https://api.nowpayments.io/v1/invoice"
+    headers = {
+        "Authorization": f"Bearer {NOWPAYMENTS_API_KEY}",
+        "Content-Type": "application/json"
+    }
+    payload = {
+        "price_amount": amount,
+        "price_currency": currency_in,
+        "order_id": f"order_{int(time.time())}",
+        "order_description": "Оплата товарів в SecureShop",
+        "ipn_callback_url": f"{WEBHOOK_URL}/nowpayments-ipn" if WEBHOOK_URL else None,
+        "success_url": f"https://t.me/{(await telegram_app.bot.get_me()).username}",
+        "cancel_url": f"https://t.me/{(await telegram_app.bot.get_me()).username}",
+        "currency_out": currency_out
+    }
     try:
-        with open(STATS_FILE, 'r', encoding='utf-8') as f:
-            data = json.load(f)
-            data['last_reset'] = datetime.fromisoformat(data['last_reset']) # Преобразуем строку обратно в datetime
-            logger.info("📊 Статистика загружена из файла")
-            return data
-    except FileNotFoundError:
-        logger.info("🆕 Файл статистики не найден, создается новый")
-        return bot_statistics
+        response = requests.post(url, headers=headers, json=payload, timeout=10)
+        response.raise_for_status()
+        data = response.json()
+        logger.info(f"✅ NOWPayments инвойс создан: {data}")
+        return data
+    except requests.exceptions.RequestException as e:
+        logger.error(f"❌ Ошибка сети NOWPayments: {e}")
+        raise
     except Exception as e:
-        logger.error(f"❌ Ошибка загрузки статистики: {e}")
-        return bot_statistics
+        logger.error(f"❌ Ошибка создания инвойса NOWPayments: {e}")
+        raise
 
-def save_stats():
+async def get_nowpayments_invoice_status(invoice_id: str) -> dict:
+    """Получает статус инвойса из NOWPayments."""
+    url = f"https://api.nowpayments.io/v1/invoice/{invoice_id}"
+    headers = {
+        "Authorization": f"Bearer {NOWPAYMENTS_API_KEY}",
+        "Content-Type": "application/json"
+    }
     try:
-        # Сохраняем копию, чтобы не модифицировать исходный объект
-        stats_to_save = bot_statistics.copy()
-        stats_to_save['last_reset'] = stats_to_save['last_reset'].isoformat() # Преобразуем datetime в строку
-        with open(STATS_FILE, 'w', encoding='utf-8') as f:
-            json.dump(stats_to_save, f, ensure_ascii=False, indent=4)
-        logger.info("💾 Статистика сохранена в файл")
+        response = requests.get(url, headers=headers, timeout=10)
+        response.raise_for_status()
+        data = response.json()
+        logger.debug(f"🔄 NOWPayments статус инвойса {invoice_id}: {data}")
+        return data
+    except requests.exceptions.RequestException as e:
+        logger.error(f"❌ Ошибка сети NOWPayments при проверке статуса: {e}")
+        raise
     except Exception as e:
-        logger.error(f"❌ Ошибка сохранения статистики: {e}")
+        logger.error(f"❌ Ошибка проверки статуса NOWPayments инвойса {invoice_id}: {e}")
+        raise
 
-def auto_save_loop():
-    """Автосохранение статистики каждые 10 минут"""
-    while True:
-        time.sleep(600) # 10 минут
-        save_stats()
-        logger.info("✅ Статистика автосохранена")
-
-# Инициализация статистики
-bot_statistics = load_stats()
-
-# Функции для работы с БД (заглушки, замените на реальные)
-def init_db():
-    """Инициализация базы данных"""
-    try:
-        with psycopg.connect(DATABASE_URL) as conn:
-            with conn.cursor() as cur:
-                # Таблица пользователей
-                cur.execute("""
-                    CREATE TABLE IF NOT EXISTS users (
-                        id BIGINT PRIMARY KEY,
-                        username VARCHAR(255),
-                        first_name VARCHAR(255),
-                        last_name VARCHAR(255),
-                        language_code VARCHAR(10),
-                        is_bot BOOLEAN,
-                        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-                    );
-                """)
-                # Таблица сообщений
-                cur.execute("""
-                    CREATE TABLE IF NOT EXISTS messages (
-                        id SERIAL PRIMARY KEY,
-                        user_id BIGINT REFERENCES users(id),
-                        message TEXT,
-                        is_from_user BOOLEAN,
-                        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-                    );
-                """)
-                # Таблица активных диалогов
-                cur.execute("""
-                    CREATE TABLE IF NOT EXISTS active_conversations (
-                        user_id BIGINT PRIMARY KEY REFERENCES users(id),
-                        conversation_type VARCHAR(50), -- 'order', 'question', 'manual', 'subscription_order', 'digital_order'
-                        assigned_owner BIGINT,
-                        last_message TEXT,
-                        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-                    );
-                """)
-                # Индексы для оптимизации
-                cur.execute("CREATE INDEX IF NOT EXISTS idx_messages_user_id ON messages(user_id);")
-                cur.execute("CREATE INDEX IF NOT EXISTS idx_messages_created_at ON messages(created_at);")
-        logger.info("✅ База данных инициализирована")
-    except Exception as e:
-        logger.error(f"❌ Ошибка инициализации базы данных: {e}")
-
-def ensure_user_exists(user):
-    """Убеждается, что пользователь существует в базе (с кэшированием)"""
-    if user.id in user_cache:
-        return
-    try:
-        with psycopg.connect(DATABASE_URL) as conn:
-            with conn.cursor() as cur:
-                cur.execute("""
-                    INSERT INTO users (id, username, first_name, last_name, language_code, is_bot)
-                    VALUES (%s, %s, %s, %s, %s, %s)
-                    ON CONFLICT (id) DO UPDATE SET
-                        username = EXCLUDED.username,
-                        first_name = EXCLUDED.first_name,
-                        last_name = EXCLUDED.last_name,
-                        language_code = EXCLUDED.language_code,
-                        updated_at = CURRENT_TIMESTAMP;
-                """, (user.id, user.username, user.first_name, user.last_name, user.language_code, user.is_bot))
-        user_cache.add(user.id)
-        logger.debug(f"👤 Пользователь {user.id} добавлен/обновлён в БД")
-    except Exception as e:
-        logger.error(f"❌ Ошибка ensure_user_exists для {user.id}: {e}")
-
-def save_message(user_id, message_text, is_from_user):
-    """Сохраняет сообщение в буфер"""
-    message_buffer.append((user_id, message_text, is_from_user))
-    if len(message_buffer) >= BUFFER_MAX_SIZE:
-        flush_message_buffer()
-
-def flush_message_buffer():
-    global message_buffer
-    if not message_buffer:
-        return
-    try:
-        with psycopg.connect(DATABASE_URL) as conn:
-            with conn.cursor() as cur:
-                # Создаем временную таблицу
-                cur.execute("""
-                    CREATE TEMP TABLE temp_messages (user_id BIGINT, message TEXT, is_from_user BOOLEAN) ON COMMIT DROP;
-                """)
-                # Заполняем временную таблицу
-                cur.executemany("""
-                    INSERT INTO temp_messages (user_id, message, is_from_user) VALUES (%s, %s, %s);
-                """, message_buffer)
-                # Вставляем данные из временной таблицы в основную
-                cur.execute("""
-                    INSERT INTO messages (user_id, message, is_from_user)
-                    SELECT user_id, message, is_from_user FROM temp_messages;
-                """)
-                conn.commit()
-        logger.info(f"📨 Буфер сообщений ({len(message_buffer)}) записан в БД")
-        message_buffer = []
-    except Exception as e:
-        logger.error(f"❌ Ошибка записи буфера сообщений: {e}")
-
-def save_active_conversation(user_id, conversation_type, assigned_owner, last_message):
-    """Сохраняет активный диалог в буфер"""
-    active_conv_buffer.append((user_id, conversation_type, assigned_owner, last_message))
-    # Простая проверка размера буфера, можно улучшить
-    if len(active_conv_buffer) >= BUFFER_MAX_SIZE:
-        flush_active_conv_buffer()
-
-def flush_active_conv_buffer():
-    global active_conv_buffer
-    if not active_conv_buffer:
-        return
-    try:
-        with psycopg.connect(DATABASE_URL) as conn:
-            with conn.cursor() as cur:
-                # Группируем по user_id, оставляя последнюю запись
-                latest_convs = {}
-                for item in active_conv_buffer:
-                    user_id = item[0]
-                    latest_convs[user_id] = item # Перезаписываем более старыми данными
-
-                # Создаем временную таблицу
-                cur.execute("""
-                    CREATE TEMP TABLE temp_active_convs (user_id BIGINT, conversation_type VARCHAR(50), assigned_owner BIGINT, last_message TEXT) ON COMMIT DROP;
-                """)
-                # Заполняем временную таблицу
-                cur.executemany("""
-                    INSERT INTO temp_active_convs (user_id, conversation_type, assigned_owner, last_message) VALUES (%s, %s, %s, %s);
-                """, list(latest_convs.values()))
-                # Обновляем или вставляем данные из временной таблицы в основную
-                cur.execute("""
-                    INSERT INTO active_conversations (user_id, conversation_type, assigned_owner, last_message)
-                    SELECT user_id, conversation_type, assigned_owner, last_message FROM temp_active_convs
-                    ON CONFLICT (user_id)
-                    DO UPDATE SET
-                        conversation_type = EXCLUDED.conversation_type,
-                        assigned_owner = EXCLUDED.assigned_owner,
-                        last_message = EXCLUDED.last_message,
-                        updated_at = CURRENT_TIMESTAMP;
-                """)
-                conn.commit()
-        logger.info(f"🔄 Буфер активных диалогов ({len(active_conv_buffer)}) записан в БД")
-        active_conv_buffer = []
-    except Exception as e:
-        logger.error(f"❌ Ошибка записи буфера активных диалогов: {e}")
-
-def delete_active_conversation(user_id):
-    """Удаляет активный диалог из БД"""
-    try:
-        with psycopg.connect(DATABASE_URL) as conn:
-            with conn.cursor() as cur:
-                cur.execute("DELETE FROM active_conversations WHERE user_id = %s", (user_id,))
-                conn.commit()
-        logger.debug(f"🗑️ Диалог пользователя {user_id} удалён из БД")
-    except Exception as e:
-        logger.error(f"❌ Ошибка удаления диалога {user_id}: {e}")
-
-def get_conversation_history(client_id):
-    """Получает историю сообщений клиента"""
-    if client_id in history_cache:
-        logger.debug(f"📖 История для {client_id} получена из кэша")
-        return history_cache[client_id]
-    try:
-        with psycopg.connect(DATABASE_URL) as conn:
-            with conn.cursor(row_factory=dict_row) as cur:
-                cur.execute("""
-                    SELECT message, is_from_user, created_at
-                    FROM messages
-                    WHERE user_id = %s
-                    ORDER BY created_at ASC
-                """, (client_id,))
-                history = cur.fetchall()
-        history_cache[client_id] = history # Кэшируем
-        logger.debug(f"📖 История для {client_id} загружена из БД")
-        return history
-    except Exception as e:
-        logger.error(f"❌ Ошибка получения истории для {client_id}: {e}")
-        return []
-
-def get_active_conversations():
-    """Получает все активные диалоги из БД"""
-    try:
-        with psycopg.connect(DATABASE_URL) as conn:
-            with conn.cursor(row_factory=dict_row) as cur:
-                cur.execute("SELECT * FROM active_conversations")
-                return cur.fetchall()
-    except Exception as e:
-        logger.error(f"❌ Ошибка получения активных диалогов: {e}")
-        return []
-
-def get_users():
-    """Получает список всех пользователей"""
-    try:
-        with psycopg.connect(DATABASE_URL) as conn:
-            with conn.cursor(row_factory=dict_row) as cur:
-                cur.execute("SELECT * FROM users ORDER BY created_at DESC")
-                return cur.fetchall()
-    except Exception as e:
-        logger.error(f"❌ Ошибка получения пользователей: {e}")
-        return []
-
-def get_total_users_count():
-    """Возвращает общее количество пользователей"""
-    try:
-        with psycopg.connect(DATABASE_URL) as conn:
-            with conn.cursor() as cur:
-                cur.execute("SELECT COUNT(*) FROM users")
-                return cur.fetchone()[0]
-    except Exception as e:
-        logger.error(f"❌ Ошибка получения количества пользователей: {e}")
-        return 0
-
-def clear_all_active_conversations():
-    """Удаляет все активные диалоги из базы данных"""
-    try:
-        with psycopg.connect(DATABASE_URL) as conn:
-            with conn.cursor() as cur:
-                cur.execute("DELETE FROM active_conversations")
-                conn.commit()
-        logger.info("🗑️ Все активные диалоги очищены из БД")
-    except Exception as e:
-        logger.error(f"❌ Ошибка очистки активных диалогов: {e}")
-# - Конец вспомогательных функций -
-
+# --- Основной класс бота ---
 class TelegramBot:
-    def __init__(self):
-        self.application = Application.builder().token(BOT_TOKEN).build()
-        self.setup_handlers()
-        self.initialized = False
-        self.loop = None
-
-    def setup_handlers(self):
-        # Обработчики команд
-        self.application.add_handler(CommandHandler("start", self.start))
-        self.application.add_handler(CommandHandler("order", self.order))
-        self.application.add_handler(CommandHandler("question", self.question))
-        self.application.add_handler(CommandHandler("channel", self.channel))
-        self.application.add_handler(CommandHandler("help", self.help_command))
-        self.application.add_handler(CommandHandler("stop", self.stop))
-        self.application.add_handler(CommandHandler("pay", self.pay_command)) # Добавлено
-        self.application.add_handler(CommandHandler("payout", self.payout_command)) # Добавлено для основателей
-        self.application.add_handler(CommandHandler("stats", self.stats_command)) # Исправлено
-        self.application.add_handler(CommandHandler("dialog", self.continue_dialog_command))
-
-        # Обработчики callback кнопок
-        self.application.add_handler(CallbackQueryHandler(self.button_handler))
-        # - Добавлено: Обработчик callback кнопок оплаты -
-        # Упрощенный паттерн для отладки и захвата всех pay_ и payout_ callback'ов
-        self.application.add_handler(CallbackQueryHandler(self.payment_callback_handler))
-        # - Конец добавленных обработчиков -
-
-        # Обработчик текстовых сообщений (должен быть последним)
-        self.application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, self.handle_message))
-
-        # Обработчик документов (для заказов из файлов)
-        self.application.add_handler(MessageHandler(filters.Document.ALL, self.handle_document))
-
-        # Обработчик ошибок
-        self.application.add_error_handler(self.error_handler)
-
-    async def set_commands_menu(self):
-        """Установка стандартного меню команд"""
-        owner_commands = [BotCommandScopeChat(chat_id=OWNER_ID_1), BotCommandScopeChat(chat_id=OWNER_ID_2)]
-        # Исправлено: Используем BotCommandScopeDefault для всех пользователей
-        user_commands = [BotCommandScopeDefault()] # Для всех пользователей
-
-        try:
-            # Команды для основателей
-            await self.application.bot.set_my_commands([
-                ('start', 'Головне меню'),
-                ('stop', 'Завершити діалог'),
-                ('stats', 'Статистика бота'),
-                ('history', 'Історія повідомлень'),
-                ('chats', 'Активні чати'),
-                ('clear', 'Очистити активні чати'),
-                ('channel', 'Наш канал'),
-                ('help', 'Допомога'),
-                ('dialog', 'Продовжити діалог (для основателей)'),
-                ('payout', 'Створити платіж для користувача (для основателей)') # Добавлена команда
-            ], scope=owner_commands[0])
-
-            await self.application.bot.set_my_commands([
-                ('start', 'Головне меню'),
-                ('stop', 'Завершити діалог'),
-                ('order', 'Зробити замовлення'),
-                ('question', 'Поставити запитання'),
-                ('channel', 'Наш канал'),
-                ('help', 'Допомога'),
-                ('pay', 'Оплатити замовлення з сайту')
-            ], scope=user_commands[0])
-            logger.info("✅ Меню команд установлено")
-        except Exception as e:
-            logger.error(f"❌ Ошибка установки меню команд: {e}")
+    def __init__(self, token: str):
+        self.token = token
+        self.application = Application.builder().token(self.token).build()
+        self.loop = None # Будет установлен в bot_thread
 
     async def initialize(self):
-        """Асинхронная инициализация приложения"""
-        try:
-            await self.application.initialize()
-            await self.set_commands_menu()
-            self.initialized = True
-            logger.info("✅ Telegram Application инициализирован")
-        except Exception as e:
-            logger.error(f"❌ Ошибка инициализации Telegram Application: {e}")
-            raise
+        """Инициализирует обработчики команд и сообщений."""
+        # --- Обработчики команд ---
+        self.application.add_handler(CommandHandler("start", self.start))
+        self.application.add_handler(CommandHandler("help", self.show_help))
+        self.application.add_handler(CommandHandler("order", self.order))
+        self.application.add_handler(CommandHandler("question", self.question_command))
+        self.application.add_handler(CommandHandler("channel", self.channel))
+        self.application.add_handler(CommandHandler("stop", self.stop))
+        self.application.add_handler(CommandHandler("pay", self.pay_command))
+        self.application.add_handler(CommandHandler("payout", self.payout_command))
+        # Команды для владельцев
+        self.application.add_handler(CommandHandler("stats", self.stats_command))
+        self.application.add_handler(CommandHandler("chats", self.show_active_chats)) # Исправлено
+        self.application.add_handler(CommandHandler("history", self.show_conversation_history)) # Исправлено
+        self.application.add_handler(CommandHandler("clear", self.clear_active_chats)) # Исправлено
+        self.application.add_handler(CommandHandler("dialog", self.continue_dialog_command)) # Исправлено
+
+        # --- Обработчики callback кнопок ---
+        # Обработчик callback кнопок оплаты (только для данных, начинающихся с pay_ или payout_)
+        self.application.add_handler(CallbackQueryHandler(self.payment_callback_handler, pattern=r'^(pay_|payout_)'))
+        # Основной обработчик для остальных кнопок
+        self.application.add_handler(CallbackQueryHandler(self.button_handler))
+
+        # --- Обработчик текстовых сообщений (должен быть последним) ---
+        self.application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, self.handle_message))
+        self.application.add_handler(MessageHandler(filters.Document.FileExtension("json"), self.handle_json_file))
+
+        # --- Обработчик ошибок ---
+        self.application.add_error_handler(self.error_handler)
+
+        logger.info("✅ Обработчики команд и сообщений зарегистрированы")
 
     async def start_polling(self):
-        """Запуск polling режима"""
-        try:
-            if self.application.updater.running:
-                logger.warning("🛑 Бот уже запущен! Пропускаем повторный запуск")
-                return
-            logger.info("🔄 Запуск polling режима...")
-            await self.application.start()
-            await self.application.updater.start_polling(
-                poll_interval=1.0,
-                timeout=10,
-                bootstrap_retries=-1,
-                read_timeout=10,
-                write_timeout=10,
-                connect_timeout=10,
-                pool_timeout=10
-            )
-            logger.info("✅ Polling запущен")
-        except Conflict as e:
-            logger.error(f"🚨 Конфликт: {e}")
-            logger.warning("🕒 Ожидаем 15 секунд перед повторной попыткой...")
-            await asyncio.sleep(15)
-            await self.start_polling()
-        except Exception as e:
-            logger.error(f"❌ Ошибка запуска polling: {e}")
-            raise
+        """Запускает бота в режиме polling."""
+        await self.application.initialize()
+        await self.application.start()
+        await self.application.updater.start_polling()
 
     async def stop_polling(self):
-        """Остановка polling"""
+        """Останавливает бота в режиме polling."""
         try:
-            if self.application.updater and self.application.updater.running:
-                await self.application.updater.stop()
-            if self.application.running:
-                await self.application.stop()
-            if self.application.post_init:
-                await self.application.shutdown()
+            await self.application.updater.stop()
+            await self.application.stop()
+            await self.application.shutdown()
             logger.info("🛑 Polling полностью остановлен")
         except Exception as e:
             logger.error(f"❌ Ошибка остановки polling: {e}")
 
     # --- Основные обработчики команд ---
-
     async def start(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Обработчик команды /start"""
         user = update.effective_user
@@ -492,25 +346,39 @@ class TelegramBot:
         keyboard = [
             [InlineKeyboardButton("🛒 Зробити замовлення", callback_data='order')],
             [InlineKeyboardButton("❓ Поставити запитання", callback_data='question')],
-            [InlineKeyboardButton("ℹ️ Допомога", callback_data='help')]
+            [InlineKeyboardButton("ℹ️ Допомога", callback_data='help')],
+            [InlineKeyboardButton("📢 Наш канал", callback_data='channel')]
         ]
         reply_markup = InlineKeyboardMarkup(keyboard)
-        welcome_text = f"""👋 Вітаємо, {user.first_name}!
-🤖 Це бот магазину SecureShop.
-Тут ви можете зробити замовлення або задати питання засновникам магазину.
-Оберіть дію нижче 👇"""
-        await update.message.reply_text(welcome_text.strip(), reply_markup=reply_markup)
+        welcome_text = f"""👋 Привіт, {user.first_name}!
+
+Ласкаво просимо до магазину **SecureShop**!
+
+Тут ви можете:
+▫️ Зробити замовлення підписок або цифрових товарів
+▫️ Задати питання нашим менеджерам
+▫️ Отримати інформацію про наші товари
+
+Оберіть дію 👇"""
+        await update.message.reply_text(welcome_text, reply_markup=reply_markup, parse_mode='Markdown')
+
+        # Обновляем статистику
+        global bot_statistics
+        if user.id not in [u for u in [OWNER_ID_1, OWNER_ID_2]]: # Простая проверка на новых пользователей
+             bot_statistics['total_users'] += 1
+             save_stats()
 
     async def order(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Обработчик команды /order"""
         user = update.effective_user
+        user_id = user.id
         # Гарантируем наличие пользователя в БД
         ensure_user_exists(user)
 
         # Проверяем активные диалоги
-        if user.id in active_conversations:
+        if user_id in active_conversations:
             await update.message.reply_text(
-                "❗ У вас вже є активний діалог.\n"
+                "❗ У вас вже є активний діалог."
                 "Будь ласка, продовжуйте писати в поточному діалозі або завершіть його командою /stop, "
                 "якщо хочете почати новий діалог."
             )
@@ -522,9 +390,9 @@ class TelegramBot:
             [InlineKeyboardButton("⬅️ Назад", callback_data='back_to_main')]
         ]
         reply_markup = InlineKeyboardMarkup(keyboard)
-        await update.message.reply_text("📦 Оберіть тип товару:", reply_markup=reply_markup)
+        await update.message.reply_text("🛍️ Оберіть тип замовлення:", reply_markup=reply_markup)
 
-    async def question(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+    async def question_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Обработчик команды /question"""
         user = update.effective_user
         user_id = user.id
@@ -534,7 +402,7 @@ class TelegramBot:
         # Проверяем активные диалоги
         if user_id in active_conversations:
             await update.message.reply_text(
-                "❗ У вас вже є активний діалог.\n"
+                "❗ У вас вже є активний діалог."
                 "Будь ласка, продовжуйте писати в поточному діалозі або завершіть його командою /stop, "
                 "якщо хочете почати новий діалог."
             )
@@ -549,43 +417,58 @@ class TelegramBot:
         }
         # Сохраняем в БД
         save_active_conversation(user_id, 'question', None, "Нове запитання")
+
         # Обновляем статистику
+        global bot_statistics
         bot_statistics['total_questions'] += 1
         save_stats()
 
         await update.message.reply_text(
-            "📝 Напишіть ваше запитання. Я передам його засновнику магазину.\n"
+            "📝 Напишіть ваше запитання. Я передам його засновнику магазину."
             "Щоб завершити цей діалог пізніше, використайте команду /stop."
         )
 
     async def channel(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Обработчик команды /channel"""
-        await update.message.reply_text("🔗 Наш канал: https://t.me/+_DqX27kO0a41YzNi")
+        channel_link = "https://t.me/+KzJ3F1D00b0zZjFi" # Замените на вашу ссылку
+        await update.message.reply_text(f"📢 Наш канал: {channel_link}")
 
-    async def help_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Обработчик команды /help"""
-        message = update.effective_message
-        user = update.effective_user
-        # Гарантируем наличие пользователя в БД
-        ensure_user_exists(user)
+    async def show_help(self, update: Update, context: ContextTypes.DEFAULT_TYPE = None):
+        """Показывает справку и информацию о сервисе"""
+        # Универсальный метод для обработки команды и кнопки
+        if isinstance(update, Update):
+            message = update.message
+        else:
+            message = update # для вызова из кнопки
 
-        # Определяем, является ли пользователь основателем
-        is_owner = user.id in [OWNER_ID_1, OWNER_ID_2]
+        user_id = message.from_user.id
+        is_owner = user_id in [OWNER_ID_1, OWNER_ID_2]
 
-        help_text = f"""ℹ️ Довідка по боту SecureShop
+        help_text = """👋 Доброго дня! Я бот магазину SecureShop.
 
-📌 Список доступних команд:
-/start - Головне меню
-/order - Зробити замовлення
-/question - Поставити запитання
-/channel - Наш канал з асортиментом, оновленнями та розіграшами
+🛒 **Як зробити замовлення:**
+1. Натисніть кнопку "🛒 Зробити замовлення" або команду /order
+2. Оберіть тип товару
+3. Надішліть деталі замовлення
+4. Оплатіть замовлення
+5. Отримайте логіни та паролі
+
+❓ **Як задати питання:**
+1. Натисніть кнопку "❓ Поставити запитання" або команду /question
+2. Напишіть ваше запитання
+3. Очікуйте відповідь від нашого менеджера
+
+💳 **Оплата:**
+- Картка (ручна оплата)
+- Криптовалюта (через NOWPayments)
+
+📢 **Наш канал:** /channel - Наш канал з асортиментом, оновленнями та розіграшами
+
 /stop - Завершити поточний діалог
 /help - Ця довідка"""
 
         if is_owner:
-            help_text += """
-            
-🔐 Команди основателя:
+            help_text += """\n\n🔐 **Команди основателя:**
 /stats - Статистика бота
 /history - Історія повідомлень клієнта
 /chats - Активні чати
@@ -595,51 +478,37 @@ class TelegramBot:
 
         help_text += "\n\n💬 Якщо у вас виникли питання, не соромтеся звертатися!"
 
-        await message.reply_text(help_text.strip())
+        if isinstance(update, Update) and update.callback_query:
+            await update.callback_query.edit_message_text(help_text.strip(), parse_mode='Markdown')
+        else:
+            await message.reply_text(help_text.strip(), parse_mode='Markdown')
 
     async def stop(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Обработчик команды /stop"""
-        user = update.effective_user
-        user_id = user.id
-        # Гарантируем наличие пользователя в БД
-        ensure_user_exists(user)
+        user_id = update.effective_user.id
 
-        # Проверяем активные диалоги
-        if user_id not in active_conversations:
-            await update.message.reply_text("❌ У вас немає активного діалогу.")
-            return
+        if user_id in active_conversations:
+            # Удаляем из активных диалогов
+            del active_conversations[user_id]
+            # Удаляем из БД
+            try:
+                with get_db_connection() as conn:
+                    with conn.cursor() as cur:
+                        cur.execute("DELETE FROM active_conversations WHERE user_id = %s", (user_id,))
+                    conn.commit()
+                logger.info(f"🛑 Активный диалог для {user_id} завершен")
+            except Exception as e:
+                logger.error(f"❌ Ошибка удаления диалога из БД для {user_id}: {e}")
 
-        # Получаем тип диалога
-        conversation_type = active_conversations[user_id]['type']
-
-        # Удаляем диалог из активных (в памяти)
-        del active_conversations[user_id]
-        # Удаляем диалог из БД
-        delete_active_conversation(user_id)
-
-        # Формируем текст подтверждения
-        if conversation_type == 'order':
-            confirmation_text = "✅ Ваше замовлення прийнято! Засновник магазину зв'яжеться з вами найближчим часом."
-        elif conversation_type == 'question':
-            confirmation_text = "✅ Ваше запитання прийнято! Засновник магазину відповість найближчим часом."
+            await update.message.reply_text("✅ Ваш діалог успішно завершено. Дякуємо за звернення!")
         else:
-            confirmation_text = "✅ Діалог завершено."
+            await update.message.reply_text("ℹ️ У вас немає активного діалогу для завершення.")
 
-        keyboard = [
-            [InlineKeyboardButton("🛒 Зробити замовлення", callback_data='order')],
-            [InlineKeyboardButton("❓ Поставити запитання", callback_data='question')],
-            [InlineKeyboardButton("ℹ️ Допомога", callback_data='help')]
-        ]
-        reply_markup = InlineKeyboardMarkup(keyboard)
-
-        await update.message.reply_text(confirmation_text, reply_markup=reply_markup)
-
-    # - Добавленные методы для оплаты -
+    # --- Добавленные методы для оплаты ---
     async def pay_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Обработчик команды /pay для заказов с сайта или ручного ввода"""
         user = update.effective_user
         user_id = user.id
-
         # Гарантируем наличие пользователя в БД
         ensure_user_exists(user)
 
@@ -663,75 +532,29 @@ class TelegramBot:
             # Формат: <ServiceAbbr>-<PlanAbbr>-<Period>-<Price>
             # Для Discord Прикраси: DisU-BzN-6$-180
             # Для обычных подписок: Dis-Ful-1м-170
-            # Пример простого формата
-            # order_text = f"Замовлення #{order_id}: {items_str}"
+            items = []
+            item_pattern = r'(\w+)-(\w+)-([\w$]+)-(\d+(?:\.\d+)?)'
+            matches = re.findall(item_pattern, items_str)
+            if not matches:
+                await update.message.reply_text("❌ Не вдалося розпізнати товари у команді.")
+                return
 
-            # --- Расшифровка заказа ---
-            pattern = r'(\w{2,4})-(\w{2,4})-([\w\s$]+?)-(\d+)'
-            items = re.findall(pattern, items_str)
+            for service_abbr, plan_abbr, period, price in matches:
+                items.append({
+                    'service': service_abbr,
+                    'plan': plan_abbr,
+                    'period': period,
+                    'price': float(price)
+                })
 
-            if not items:
-                 await update.message.reply_text("❌ Не вдалося розпізнати товари у замовленні. Перевірте формат.")
-                 return
+            # Формируем текст заказа
+            order_text = f"🛍️ Замовлення #{order_id} (з команди /pay):\n"
+            total_uah = 0.0
+            for item in items:
+                order_text += f"▫️ {item['service']} {item.get('plan', '')} ({item['period']}) - {item['price']} UAH\n"
+                total_uah += item['price']
+            order_text += f"💳 Всього: {total_uah} UAH"
 
-            # Расшифровка сокращений
-            service_map = {
-                "Cha": "ChatGPT",
-                "Dis": "Discord",
-                "Duo": "Duolingo",
-                "Pic": "PicsArt",
-                "Can": "Canva",
-                "Net": "Netflix",
-                "DisU": "Discord Прикраси" # Обновлено: Украшення -> Прикраси
-            }
-            plan_map = {
-                "Bas": "Basic",
-                "Ful": "Full",
-                "Ind": "Individual",
-                "Fam": "Family",
-                "Plu": "Plus",
-                "Pro": "Pro",
-                "Pre": "Premium",
-                "BzN": "Без Nitro", # Для прикрас
-                "ZN": "З Nitro"     # Для прикрас
-            }
-            period_map = {
-                "1м": "1 місяць",
-                "12м": "12 місяців",
-                "6$": "6$",
-                "8$": "8$",
-                "9$": "9$",
-                "12$": "12$",
-                "5$": "5$",
-                "7$": "7$",
-                "8.5$": "8.5$",
-                "14$": "14$",
-                "22$": "22$"
-                # Добавьте другие периоды при необходимости
-            }
-
-            order_lines = [f"📦 Замовлення #{order_id}:"]
-            total_uah = 0
-            for service_abbr, plan_abbr, period_abbr, price_uah in items:
-                service_name = service_map.get(service_abbr, service_abbr)
-                plan_name = plan_map.get(plan_abbr, plan_abbr)
-                period_name = period_map.get(period_abbr, period_abbr)
-                price_uah_int = int(price_uah)
-                total_uah += price_uah_int
-                order_lines.append(f"  • {service_name} {plan_name} ({period_name}) - {price_uah_int} UAH")
-
-            order_lines.append(f"💳 Всього: {total_uah} UAH")
-            order_text = "\n".join(order_lines)
-            # --- Конец расшифровки заказа ---
-
-        # Сохраняем в БД
-        save_active_conversation(user_id, 'order', None, order_text)
-
-        # Обновляем статистику
-        bot_statistics['total_orders'] += 1
-        save_stats()
-
-        # - Начало логики оплаты -
         # Извлекаем сумму в UAH
         uah_amount = get_uah_amount_from_order_text(order_text)
         if uah_amount <= 0:
@@ -757,91 +580,17 @@ class TelegramBot:
         ]
         reply_markup = InlineKeyboardMarkup(keyboard)
         await update.message.reply_text(f"💳 Оберіть метод оплати для суми {usd_amount}$:", reply_markup=reply_markup)
-        # - Конец логики оплаты -
 
-    async def payout_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Обработчик команды /payout для основателей"""
-        logger.info("📥 /payout команда получена")
-        user = update.effective_user
-        user_id = user.id
-
-        # Проверяем, является ли пользователь основателем
-        if user_id not in [OWNER_ID_1, OWNER_ID_2]:
-            logger.info(f"🚫 /payout: Доступ запрещен для пользователя {user_id}")
-            await update.message.reply_text("❌ У вас немає доступу до цієї команди.")
-            return
-
-        logger.info(f"✅ /payout: Доступ разрешен для основателя {user_id}")
-
-        # Проверяем аргументы команды
-        if len(context.args) < 2:
-            logger.info(f"⚠️ /payout: Неверный формат от пользователя {user_id}")
-            await update.message.reply_text(
-                "❌ Неправильний формат команди.\n"
-                "Використовуйте: `/payout <user_id> <amount_in_uah>`\n"
-                "Наприклад: `/payout 123456789 500`",
-                parse_mode='Markdown'
-            )
-            return
-
-        try:
-            # --- Исправлено: user_id -> target_user_id ---
-            target_user_id = int(context.args[0])
-            uah_amount = float(context.args[1])
-            # ---
-            if uah_amount <= 0:
-                raise ValueError("Сума повинна бути більше нуля.")
-            logger.info(f"✅ /payout: Аргументы распознаны. target_user_id={target_user_id}, uah_amount={uah_amount}")
-        except ValueError as e:
-            logger.error(f"❌ /payout: Ошибка парсинга аргументов от {user_id}: {e}")
-            await update.message.reply_text(f"❌ Неправильний формат ID користувача або суми: {e}")
-            return
-
-        # Конвертируем сумму в USD
-        usd_amount = convert_uah_to_usd(uah_amount)
-        if usd_amount <= 0:
-            logger.info(f"⚠️ /payout: Сумма USD слишком мала для {user_id}")
-            await update.message.reply_text("❌ Сума в USD занадто мала для створення рахунку.")
-            return
-
-        # Сохраняем данные в контексте для последующей обработки
-        # --- Исправлено: сохраняем target_user_id ---
-        context.user_data['payout_target_user_id'] = target_user_id
-        # ---
-        context.user_data['payout_amount_uah'] = uah_amount
-        context.user_data['payout_amount_usd'] = usd_amount
-
-        logger.info(f"💾 /payout: Данные сохранены в context.user_data для {user_id}")
-
-        # Предлагаем выбрать метод оплаты
-        keyboard = [
-            [InlineKeyboardButton("💳 Оплата карткою", callback_data='payout_card')],
-            [InlineKeyboardButton("🪙 Криптовалюта", callback_data='payout_crypto')],
-            [InlineKeyboardButton("⬅️ Назад", callback_data='payout_cancel')],
-            [InlineKeyboardButton("❓ Запитання", callback_data='question')] # Эта кнопка работает, так как обрабатывается button_handler
-        ]
-        reply_markup = InlineKeyboardMarkup(keyboard)
-        msg_text = (
-            f"💳 Створення рахунку на {uah_amount}₴ ({usd_amount}$) для користувача `{target_user_id}`.\n"
-            f"Оберіть метод оплати:"
-        )
-        logger.info(f"📤 /payout: Отправка меню выбора оплаты пользователю {user_id}")
-        await update.message.reply_text(
-            msg_text,
-            parse_mode='Markdown',
-            reply_markup=reply_markup
-        )
-
+    # --- Логика оплаты ---
     async def payment_callback_handler(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Обработчик callback кнопок, связанных с оплатой"""
         query = update.callback_query
         await query.answer()
         user_id = query.from_user.id # ID того, кто нажал кнопку
         data = query.data
-
         logger.info(f"📥 Callback received: data='{data}', from user_id={user_id}")
 
-        # --- Логика для /pay ---
+        # - Логика для /pay -
         if data.startswith('pay_'):
             logger.info(f"➡️ Передача callback 'pay_' в существующую логику для пользователя {user_id}")
             # Проверяем, есть ли сумма в контексте
@@ -862,12 +611,13 @@ class TelegramBot:
                 ]
                 reply_markup = InlineKeyboardMarkup(keyboard)
                 await query.edit_message_text(
-                    f"💳 Будь ласка, здійсніть оплату {usd_amount}$ карткою на реквізити магазину.\n"
-                    f"(Тут будуть реквізити)\n"
-                    f"Після оплати натисніть кнопку '✅ Оплачено'.",
+                    f"💳 Реквізити для оплати {usd_amount}$:\n"
+                    "`1234 5678 9012 3456`\n"
+                    "(Тестові реквізити)\n\n"
+                    "Після оплати натисніть кнопку '✅ Оплачено'.",
+                    parse_mode='Markdown',
                     reply_markup=reply_markup
                 )
-                context.user_data['awaiting_manual_payment_confirmation'] = True
                 logger.info(f"💳 Показаны реквизиты для карты pay пользователю {user_id}")
 
             # - Оплата криптовалютою -
@@ -880,65 +630,46 @@ class TelegramBot:
                 keyboard.append([InlineKeyboardButton("❓ Запитання", callback_data='question')])
                 reply_markup = InlineKeyboardMarkup(keyboard)
                 await query.edit_message_text(f"🪙 Оберіть криптовалюту для оплати {usd_amount}$:", reply_markup=reply_markup)
-                context.user_data['awaiting_crypto_currency_selection'] = True
+                context.user_data.pop('nowpayments_invoice_id', None)
                 logger.info(f"🪙 Показан выбор криптовалюты для pay пользователю {user_id}")
 
-            # - Выбор конкретной криптовалюты -
+            # - Выбор конкретной криптовалюты для оплаты -
             elif data.startswith('pay_crypto_'):
-                pay_currency = data.split('_')[2] # e.g., 'usdttrc20'
-                # Находим название валюты
-                currency_name = next((name for name, code in AVAILABLE_CURRENCIES.items() if code == pay_currency), pay_currency)
-                try:
-                    # Создаем счет в NOWPayments
-                    headers = {
-                        'Authorization': f'Bearer {NOWPAYMENTS_API_KEY}',
-                        'Content-Type': 'application/json'
-                    }
-                    payload = {
-                        "price_amount": usd_amount,
-                        "price_currency": "usd",
-                        "pay_currency": pay_currency,
-                        "ipn_callback_url": f"{WEBHOOK_URL}/nowpayments_ipn", # URL для уведомлений
-                        "order_id": f"order_{user_id}_{int(time.time())}", # Уникальный ID заказа
-                        "order_description": f"Оплата замовлення користувача {user_id}"
-                    }
-                    logger.info(f"Создание инвойса NOWPayments для pay: {payload}")
-                    response = requests.post("https://api.nowpayments.io/v1/invoice", json=payload, headers=headers)
-                    logger.info(f"Ответ NOWPayments для pay: {response.status_code}")
-                    response.raise_for_status()
-                    invoice = response.json()
-                    pay_url = invoice.get("invoice_url", "Помилка отримання посилання")
-                    invoice_id = invoice.get("invoice_id", "Невідомий ID рахунку")
+                currency_code = data.split('_', 2)[2]
+                currency_name = next((name for name, code in AVAILABLE_CURRENCIES.items() if code == currency_code), currency_code.upper())
 
-                    # Сохраняем ID инвойса для возможной проверки статуса
+                try:
+                    # Создаем инвойс в NOWPayments
+                    invoice_data = await create_nowpayments_invoice(usd_amount, 'usd', currency_code)
+                    invoice_id = invoice_data.get('id')
+                    invoice_url = invoice_data.get('invoice_url')
+
+                    if not invoice_id or not invoice_url:
+                        raise Exception("NOWPayments не вернул ID или URL инвойса")
+
+                    # Сохраняем ID инвойса в контексте
                     context.user_data['nowpayments_invoice_id'] = invoice_id
 
                     keyboard = [
-                        [InlineKeyboardButton("🔗 Перейти до оплати", url=pay_url)],
+                        [InlineKeyboardButton("🔗 Перейти до оплати", url=invoice_url)],
                         [InlineKeyboardButton("🔄 Перевірити статус", callback_data='check_payment_status')],
                         [InlineKeyboardButton("⬅️ Назад", callback_data='back_to_crypto_selection')],
                         [InlineKeyboardButton("❓ Запитання", callback_data='question')]
                     ]
                     reply_markup = InlineKeyboardMarkup(keyboard)
                     await query.edit_message_text(
-                        f"🪙 Посилання для оплати {usd_amount}$ в {currency_name}:\n"
-                        f"{pay_url}\n"
-                        f"ID рахунку: {invoice_id}\n"
-                        f"Будь ласка, здійсніть оплату та перевірте статус.",
+                        f"🪙 Оплата {usd_amount}$ в {currency_name}:\n"
+                        f"ID інвойсу: `{invoice_id}`\n\n"
+                        "Натисніть кнопку нижче для переходу до оплати.",
+                        parse_mode='Markdown',
                         reply_markup=reply_markup
                     )
-                    logger.info(f"🪙 Инвойс {invoice_id} создан для pay пользователя {user_id}")
-                except Exception as e:
-                    logger.error(f"Помилка створення інвойсу NOWPayments для pay: {e}")
-                    await query.edit_message_text(f"❌ Помилка створення посилання для оплати: {e}")
+                    logger.info(f"🪙 NOWPayments инвойс создан для pay {user_id}: {invoice_id}")
 
-            # - Ручне підтвердження оплати -
-            elif data == 'manual_payment_confirmed':
-                # Здесь можно добавить логику проверки оплаты вручную или просто перейти к следующему шагу
-                await query.edit_message_text("✅ Оплата підтверджена вручну.")
-                # Переходим к сбору данных аккаунта
-                await self.request_account_data(update, context)
-                logger.info(f"✅ Ручное подтверждение оплаты pay для пользователя {user_id}")
+                except Exception as e:
+                    error_msg = f"❌ Помилка створення посилання для оплати: {e}"
+                    await query.edit_message_text(error_msg)
+                    logger.error(f"Ошибка создания инвойса NOWPayments для pay: {e}")
 
             # - Назад до вибору методу оплати -
             elif data == 'back_to_payment_methods':
@@ -952,12 +683,10 @@ class TelegramBot:
                 reply_markup = InlineKeyboardMarkup(keyboard)
                 await query.edit_message_text(f"💳 Оберіть метод оплати для суми {usd_amount}$:", reply_markup=reply_markup)
                 # Очищаем временные состояния
-                context.user_data.pop('awaiting_manual_payment_confirmation', None)
-                context.user_data.pop('awaiting_crypto_currency_selection', None)
                 context.user_data.pop('nowpayments_invoice_id', None)
                 logger.info(f"⬅️ Назад к выбору метода оплаты для pay пользователя {user_id}")
 
-            # - Назад до вибору криптовалюти -
+            # - Назад до вибору криптовалют -
             elif data == 'back_to_crypto_selection':
                 # Отображаем список доступных криптовалют
                 keyboard = []
@@ -974,24 +703,27 @@ class TelegramBot:
             elif data == 'check_payment_status':
                 invoice_id = context.user_data.get('nowpayments_invoice_id')
                 if not invoice_id:
-                    await query.edit_message_text("❌ Не знайдено ID рахунку для перевірки.")
-                    logger.warning(f"ID инвойса не найден для проверки статуса pay пользователем {user_id}")
+                    await query.edit_message_text("❌ Не знайдено ID інвойсу для перевірки.")
                     return
+
                 try:
-                    headers = {
-                        'Authorization': f'Bearer {NOWPAYMENTS_API_KEY}',
-                        'Content-Type': 'application/json'
-                    }
-                    response = requests.get(f"https://api.nowpayments.io/v1/invoice/{invoice_id}", headers=headers)
-                    response.raise_for_status()
-                    status_data = response.json()
+                    status_data = await get_nowpayments_invoice_status(invoice_id)
                     payment_status = status_data.get('payment_status', 'unknown')
 
                     if payment_status == 'finished':
-                        await query.edit_message_text("✅ Оплата успішно пройшла!")
+                        # Оплата успешна
+                        success_msg = f"✅ Оплата інвойсу `{invoice_id}` успішно завершена!\nДякуємо за покупку!"
+                        keyboard = [
+                            [InlineKeyboardButton("🛒 Продовжити", callback_data='request_account_data')],
+                            [InlineKeyboardButton("⬅️ Назад", callback_data='back_to_main')]
+                        ]
+                        reply_markup = InlineKeyboardMarkup(keyboard)
+                        await query.edit_message_text(success_msg, parse_mode='Markdown', reply_markup=reply_markup)
+
                         # Переходим к сбору данных аккаунта
-                        await self.request_account_data(update, context)
+                        # await self.request_account_data(update, context) # Отложим до нажатия кнопки
                         logger.info(f"✅ Оплата инвойса {invoice_id} успешно завершена для пользователя {user_id}")
+
                     elif payment_status in ['waiting', 'confirming', 'confirmed']:
                         keyboard = [
                             [InlineKeyboardButton("🔄 Перевірити ще раз", callback_data='check_payment_status')],
@@ -1004,6 +736,7 @@ class TelegramBot:
                             reply_markup=reply_markup
                         )
                         logger.info(f"⏳ Статус оплаты инвойса {invoice_id}: {payment_status} (проверка пользователем {user_id})")
+
                     else: # cancelled, expired, etc.
                         keyboard = [
                             [InlineKeyboardButton("💳 Інший метод оплати", callback_data='back_to_payment_methods')],
@@ -1012,51 +745,45 @@ class TelegramBot:
                         ]
                         reply_markup = InlineKeyboardMarkup(keyboard)
                         await query.edit_message_text(
-                            f"❌ Оплата не пройшла або була скасована. Статус: {payment_status}.",
+                            f'❌ Оплата не пройшла або була скасована. Статус: `{payment_status}`.',
+                            parse_mode='Markdown',
                             reply_markup=reply_markup
                         )
                         logger.info(f"❌ Оплата инвойса {invoice_id} не удалась или отменена. Статус: {payment_status} (проверка пользователем {user_id})")
-                except Exception as e:
-                    logger.error(f"Помилка перевірки статусу NOWPayments для pay: {e}")
-                    await query.edit_message_text(f"❌ Помилка перевірки статусу оплати: {e}")
 
-        # --- Логика для /payout ---
+                except Exception as e:
+                    error_msg = f"❌ Помилка перевірки статусу оплати: {e}"
+                    await query.edit_message_text(error_msg)
+                    logger.error(f"Ошибка проверки статуса NOWPayments для инвойса {invoice_id}: {e}")
+
+            # - Ручне підтвердження оплати -
+            elif data == 'manual_payment_confirmed':
+                # Здесь можно добавить логику проверки оплаты вручную или просто перейти к следующему шагу
+                await query.edit_message_text("✅ Оплата підтверджена вручну.")
+                # Переходим к сбору данных аккаунта
+                await self.request_account_data(update, context)
+                logger.info(f"✅ Ручное подтверждение оплаты pay для пользователя {user_id}")
+
+        # - Логика для /payout -
         elif data.startswith('payout_'):
-            logger.info(f"🎯 Начало обработки payout callback: '{data}' от пользователя {user_id}")
+            logger.info(f"➡️ Передача callback 'payout_' в существующую логику для пользователя {user_id}")
             # Проверяем, является ли пользователь основателем
             if user_id not in [OWNER_ID_1, OWNER_ID_2]:
-                logger.warning(f"🚫 Несанкционированный доступ к payout callback '{data}' для пользователя {user_id}")
-                await query.answer("❌ У вас немає доступу.", show_alert=True)
+                await query.edit_message_text("❌ У вас немає прав для цієї дії.")
                 return
 
-            # Проверяем, есть ли данные в контексте
-            # --- Исправлено: получаем target_user_id ---
+            # Извлекаем данные из контекста
             target_user_id = context.user_data.get('payout_target_user_id')
-            # ---
-            uah_amount = context.user_data.get('payout_amount_uah')
+            # uah_amount = context.user_data.get('payout_amount_uah') # Не используется напрямую
             usd_amount = context.user_data.get('payout_amount_usd')
 
-            logger.info(f"📂 Данные из context.user_data для {user_id}: target_user_id={target_user_id}, uah={uah_amount}, usd={usd_amount}")
-
-            if not target_user_id or not uah_amount or not usd_amount:
-                error_msg = "❌ Помилка: інформація про платіж втрачена. Спробуйте ще раз."
+            if not target_user_id or not usd_amount:
+                await query.edit_message_text("❌ Помилка: інформація про платіж втрачена. Спробуйте ще раз.")
                 logger.error(f"⚠️ Данные payout потеряны для пользователя {user_id}")
-                await query.edit_message_text(error_msg)
                 return
 
-            # - Отмена -
-            if data == 'payout_cancel':
-                await query.edit_message_text("❌ Створення рахунку скасовано.")
-                # Очищаем контекст
-                context.user_data.pop('payout_target_user_id', None)
-                context.user_data.pop('payout_amount_uah', None)
-                context.user_data.pop('payout_amount_usd', None)
-                context.user_data.pop('payout_nowpayments_invoice_id', None)
-                logger.info(f"❌ Створення рахунку скасовано користувачем {user_id}")
-                return
-
-            # - Оплата карткой -
-            elif data == 'payout_card':
+            # - Оплата карткою -
+            if data == 'payout_card':
                 # Создаем временную ссылку или просто сообщаем пользователю
                 keyboard = [
                     [InlineKeyboardButton("✅ Оплачено", callback_data='payout_manual_payment_confirmed')],
@@ -1065,9 +792,11 @@ class TelegramBot:
                 ]
                 reply_markup = InlineKeyboardMarkup(keyboard)
                 await query.edit_message_text(
-                    f"💳 Оплата {uah_amount}₴ ({usd_amount}$) карткою.\n"
-                    f"(Тут будуть реквізити для оплати)\n"
-                    f"Після оплати натисніть кнопку '✅ Оплачено'.",
+                    f"💳 Реквізити для оплати {usd_amount}$ користувачу <@{target_user_id}>:\n"
+                    "`1234 5678 9012 3456`\n"
+                    "(Тестові реквізити)\n\n"
+                    "Після оплати натисніть кнопку '✅ Оплачено'.",
+                    parse_mode='Markdown',
                     reply_markup=reply_markup
                 )
                 logger.info(f"💳 Показаны реквизиты для карты payout пользователю {user_id}")
@@ -1081,75 +810,106 @@ class TelegramBot:
                 keyboard.append([InlineKeyboardButton("⬅️ Назад", callback_data='payout_cancel')])
                 keyboard.append([InlineKeyboardButton("❓ Запитання", callback_data='question')])
                 reply_markup = InlineKeyboardMarkup(keyboard)
-                await query.edit_message_text(
-                    f"🪙 Оберіть криптовалюту для створення рахунку на {uah_amount}₴ ({usd_amount}$):",
-                    reply_markup=reply_markup
-                )
+                await query.edit_message_text(f"🪙 Оберіть криптовалюту для оплати {usd_amount}$ користувачу <@{target_user_id}>:", reply_markup=reply_markup)
                 logger.info(f"🪙 Показан выбор криптовалюты для payout пользователю {user_id}")
 
-            # - Выбор конкретной криптовалюты -
+            # - Выбор конкретной криптовалюты для оплаты -
             elif data.startswith('payout_crypto_'):
-                pay_currency = data.split('_')[2]  # e.g., 'usdttrc20'
-                # Находим название валюты
-                currency_name = next((name for name, code in AVAILABLE_CURRENCIES.items() if code == pay_currency), pay_currency)
-                try:
-                    # Создаем счет в NOWPayments
-                    headers = {
-                        'Authorization': f'Bearer {NOWPAYMENTS_API_KEY}', # Используем Bearer токен
-                        'Content-Type': 'application/json'
-                    }
-                    payload = {
-                        "price_amount": usd_amount,
-                        "price_currency": "usd",
-                        "pay_currency": pay_currency,
-                        "ipn_callback_url": f"{WEBHOOK_URL}/nowpayments_ipn",  # URL для уведомлений (если используется webhook)
-                        "order_id": f"payout_{user_id}_{target_user_id}_{int(time.time())}",  # Уникальный ID
-                        "order_description": f"Виставлення рахунку основателем {user_id} для користувача {target_user_id}"
-                    }
-                    logger.info(f"Создание инвойса NOWPayments для payout: {payload}")
-                    response = requests.post("https://api.nowpayments.io/v1/invoice", json=payload, headers=headers)
-                    logger.info(f"Ответ NOWPayments для payout: {response.status_code}")
-                    response.raise_for_status()
-                    invoice = response.json()
-                    pay_url = invoice.get("invoice_url", "Помилка отримання посилання")
-                    invoice_id = invoice.get("invoice_id", "Невідомий ID рахунку")
+                currency_code = data.split('_', 2)[2]
+                currency_name = next((name for name, code in AVAILABLE_CURRENCIES.items() if code == currency_code), currency_code.upper())
 
-                    # Сохраняем ID инвойса
+                try:
+                    # Создаем инвойс в NOWPayments
+                    invoice_data = await create_nowpayments_invoice(usd_amount, 'usd', currency_code)
+                    invoice_id = invoice_data.get('id')
+                    invoice_url = invoice_data.get('invoice_url')
+
+                    if not invoice_id or not invoice_url:
+                        raise Exception("NOWPayments не вернул ID или URL инвойса")
+
+                    # Сохраняем ID инвойса в контексте
                     context.user_data['payout_nowpayments_invoice_id'] = invoice_id
 
                     keyboard = [
-                        [InlineKeyboardButton("🔗 Перейти до оплати", url=pay_url)],
+                        [InlineKeyboardButton("🔗 Перейти до оплати", url=invoice_url)],
                         [InlineKeyboardButton("🔄 Перевірити статус", callback_data='payout_check_payment_status')],
                         [InlineKeyboardButton("⬅️ Назад", callback_data='payout_cancel')],
                         [InlineKeyboardButton("❓ Запитання", callback_data='question')]
                     ]
                     reply_markup = InlineKeyboardMarkup(keyboard)
-                    # --- Исправлено: Отправляем ссылку ЦЕЛЕВОМУ пользователю ---
-                    try:
-                        await context.bot.send_message(
-                            chat_id=target_user_id, # <-- Отправляем target_user_id
-                            text=f"🪙 Вам виставлено рахунок на {uah_amount}₴ ({usd_amount}$) в {currency_name}:\n"
-                                 f"{pay_url}\n"
-                                 f"ID рахунку: `{invoice_id}`\n"
-                                 f"Будь ласка, здійсніть оплату.",
-                            parse_mode='Markdown'
-                        )
-                        confirmation_msg = f"✅ Рахунок створено та надіслано користувачу `{target_user_id}`.\nПосилання: {pay_url}"
-                        await query.edit_message_text(confirmation_msg, parse_mode='Markdown')
-                        logger.info(f"📨 Инвойс {invoice_id} создан и отправлен пользователю {target_user_id} по запросу основателя {user_id}")
-                    except Exception as e:
-                        error_send_msg = f"❌ Рахунок створено, але не вдалося надіслати користувачу {target_user_id}: {e}\nПосилання: {pay_url}"
-                        await query.edit_message_text(error_send_msg)
-                        logger.error(f"🚨 Ошибка отправки инвойса {invoice_id} пользователю {target_user_id}: {e}")
-                    # ---
-                except requests.exceptions.RequestException as e:
-                    error_msg = f"❌ Помилка з'єднання з сервісом оплати: {e}"
-                    await query.edit_message_text(error_msg)
-                    logger.error(f"Ошибка сети NOWPayments для payout: {e}")
+                    await query.edit_message_text(
+                        f"🪙 Оплата {usd_amount}$ в {currency_name} користувачу <@{target_user_id}>:\n"
+                        f"ID інвойсу: `{invoice_id}`\n\n"
+                        "Натисніть кнопку нижче для переходу до оплати.",
+                        parse_mode='Markdown',
+                        reply_markup=reply_markup
+                    )
+                    logger.info(f"🪙 NOWPayments инвойс создан для payout {user_id}: {invoice_id}")
+
                 except Exception as e:
                     error_msg = f"❌ Помилка створення посилання для оплати: {e}"
                     await query.edit_message_text(error_msg)
                     logger.error(f"Ошибка создания инвойса NOWPayments для payout: {e}")
+
+            # - Перевірка статуса оплати -
+            elif data == 'payout_check_payment_status':
+                invoice_id = context.user_data.get('payout_nowpayments_invoice_id')
+                if not invoice_id:
+                    await query.edit_message_text("❌ Не знайдено ID інвойсу для перевірки.")
+                    return
+
+                try:
+                    status_data = await get_nowpayments_invoice_status(invoice_id)
+                    payment_status = status_data.get('payment_status', 'unknown')
+
+                    if payment_status == 'finished':
+                        # Оплата успешна
+                        success_msg = f"✅ Оплата інвойсу `{invoice_id}` успішно завершена!\nДякуємо за покупку!"
+                        keyboard = [
+                            [InlineKeyboardButton("✅ Підтвердити вручну", callback_data='payout_manual_payment_confirmed')],
+                            [InlineKeyboardButton("⬅️ Назад", callback_data='payout_cancel')]
+                        ]
+                        reply_markup = InlineKeyboardMarkup(keyboard)
+                        await query.edit_message_text(
+                            success_msg + "\n\n❗ Для завершення процесу, підтвердіть оплату вручну.",
+                            parse_mode='Markdown',
+                            reply_markup=reply_markup
+                        )
+                        # Очищаем контекст после успешной оплаты
+                        # context.user_data.pop('payout_target_user_id', None)
+                        # context.user_data.pop('payout_amount_uah', None)
+                        # context.user_data.pop('payout_amount_usd', None)
+                        # context.user_data.pop('payout_nowpayments_invoice_id', None)
+                        logger.info(f"✅ Оплата инвойса {invoice_id} успешно завершена по проверке статуса пользователем {user_id}")
+
+                    elif payment_status in ['waiting', 'confirming', 'confirmed']:
+                        keyboard = [
+                            [InlineKeyboardButton("🔄 Перевірити ще раз", callback_data='payout_check_payment_status')],
+                            [InlineKeyboardButton("⬅️ Назад", callback_data='payout_cancel')],
+                            [InlineKeyboardButton("❓ Запитання", callback_data='question')]
+                        ]
+                        reply_markup = InlineKeyboardMarkup(keyboard)
+                        await query.edit_message_text(
+                            f"⏳ Статус оплати: {payment_status}. Будь ласка, зачекайте або перевірте ще раз.",
+                            reply_markup=reply_markup
+                        )
+                        logger.info(f"⏳ Статус оплаты инвойса {invoice_id}: {payment_status} (проверка пользователем {user_id})")
+
+                    else: # cancelled, expired, partially_paid, etc.
+                        keyboard = [
+                            [InlineKeyboardButton("💳 Інший метод оплати", callback_data='payout_cancel')], # Просто отмена, можно добавить повторный выбор
+                            [InlineKeyboardButton("⬅️ Назад", callback_data='payout_cancel')],
+                            [InlineKeyboardButton("❓ Запитання", callback_data='question')]
+                        ]
+                        reply_markup = InlineKeyboardMarkup(keyboard)
+                        fail_msg = f"❌ Оплата не пройшла або була скасована. Статус: `{payment_status}`."
+                        await query.edit_message_text(fail_msg, parse_mode='Markdown', reply_markup=reply_markup)
+                        logger.info(f"❌ Оплата инвойса {invoice_id} не удалась или отменена. Статус: {payment_status} (проверка пользователем {user_id})")
+
+                except Exception as e:
+                    error_msg = f"❌ Помилка перевірки статусу оплати: {e}"
+                    await query.edit_message_text(error_msg)
+                    logger.error(f"Ошибка проверки статуса NOWPayments для payout инвойса {invoice_id}: {e}")
 
             # - Ручне підтвердження оплати -
             elif data == 'payout_manual_payment_confirmed':
@@ -1165,494 +925,109 @@ class TelegramBot:
                 context.user_data.pop('payout_nowpayments_invoice_id', None)
                 logger.info(f"✅ Ручное подтверждение оплаты payout для пользователя {user_id}")
 
-            # - Перевірка статуса оплати -
-            elif data == 'payout_check_payment_status':
-                invoice_id = context.user_data.get('payout_nowpayments_invoice_id')
-                if not invoice_id:
-                    await query.edit_message_text("❌ Не знайдено ID рахунку для перевірки.")
-                    logger.warning(f"ID инвойса не найден для проверки статуса payout пользователем {user_id}")
-                    return
-                try:
-                    headers = {
-                        'Authorization': f'Bearer {NOWPAYMENTS_API_KEY}', # Используем Bearer токен
-                        'Content-Type': 'application/json'
-                    }
-                    response = requests.get(f"https://api.nowpayments.io/v1/invoice/{invoice_id}", headers=headers)
-                    response.raise_for_status()
-                    status_data = response.json()
-                    payment_status = status_data.get('payment_status', 'unknown')
-
-                    if payment_status == 'finished':
-                        success_msg = "✅ Оплата успішно пройшла!\nІнформуйте користувача про подальші дії."
-                        await query.edit_message_text(success_msg)
-                        # Очищаем контекст после успешной оплаты
-                        context.user_data.pop('payout_target_user_id', None)
-                        context.user_data.pop('payout_amount_uah', None)
-                        context.user_data.pop('payout_amount_usd', None)
-                        context.user_data.pop('payout_nowpayments_invoice_id', None)
-                        logger.info(f"✅ Оплата инвойса {invoice_id} успешно завершена по проверке статуса пользователем {user_id}")
-                    elif payment_status in ['waiting', 'confirming', 'confirmed']:
-                        keyboard = [
-                            [InlineKeyboardButton("🔄 Перевірити ще раз", callback_data='payout_check_payment_status')],
-                            [InlineKeyboardButton("⬅️ Назад", callback_data='payout_cancel')],
-                            [InlineKeyboardButton("❓ Запитання", callback_data='question')]
-                        ]
-                        reply_markup = InlineKeyboardMarkup(keyboard)
-                        status_msg = f"⏳ Статус оплати: `{payment_status}`. Будь ласка, зачекайте або перевірте ще раз."
-                        await query.edit_message_text(status_msg, parse_mode='Markdown', reply_markup=reply_markup)
-                        logger.info(f"⏳ Статус оплаты инвойса {invoice_id}: {payment_status} (проверка пользователем {user_id})")
-                    else:  # cancelled, expired, partially_paid, etc.
-                        keyboard = [
-                            [InlineKeyboardButton("💳 Інший метод оплати", callback_data='payout_cancel')], # Просто отмена, можно добавить повторный выбор
-                            [InlineKeyboardButton("⬅️ Назад", callback_data='payout_cancel')],
-                            [InlineKeyboardButton("❓ Запитання", callback_data='question')]
-                        ]
-                        reply_markup = InlineKeyboardMarkup(keyboard)
-                        fail_msg = f"❌ Оплата не пройшла або була скасована. Статус: `{payment_status}`."
-                        await query.edit_message_text(fail_msg, parse_mode='Markdown', reply_markup=reply_markup)
-                        logger.info(f"❌ Оплата инвойса {invoice_id} не удалась или отменена. Статус: {payment_status} (проверка пользователем {user_id})")
-                except Exception as e:
-                    error_msg = f"❌ Помилка перевірки статусу оплати: {e}"
-                    await query.edit_message_text(error_msg)
-                    logger.error(f"Ошибка проверки статуса NOWPayments для payout инвойса {invoice_id}: {e}")
+            # - Отмена payout -
+            elif data == 'payout_cancel':
+                await query.edit_message_text("↩️ Створення платежу скасовано.")
+                # Очищаем контекст
+                context.user_data.pop('payout_target_user_id', None)
+                context.user_data.pop('payout_amount_uah', None)
+                context.user_data.pop('payout_amount_usd', None)
+                context.user_data.pop('payout_nowpayments_invoice_id', None)
+                logger.info(f"↩️ Payout отменен пользователем {user_id}")
 
     async def request_account_data(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Запрашивает у пользователя логин и пароль от аккаунта"""
         query = update.callback_query
         user_id = query.from_user.id if update.callback_query else update.effective_user.id
-        order_details = context.user_data.get('order_details_for_payment', '')
 
-        # Определяем тип заказа (можно уточнить логику)
-        is_digital = 'digital_order' in active_conversations.get(user_id, {}).get('type', '')
-        item_type = "акаунту Discord" if is_digital else "акаунту"
+        keyboard = [
+            [InlineKeyboardButton("⬅️ Назад", callback_data='back_to_main')]
+        ]
+        reply_markup = InlineKeyboardMarkup(keyboard)
 
-        # Сообщаем пользователю и переходим в состояние ожидания данных
-        message_text = (
-            f"✅ Оплата пройшла успішно!\n"
-            f"Будь ласка, надішліть мені логін та пароль від {item_type}.\n"
-            f"Наприклад: `login:password` або `login password`"
-        )
-        if update.callback_query:
-            await query.edit_message_text(message_text, parse_mode='Markdown')
+        # Отправляем запрос
+        request_text = "🔒 Для отримання товару, будь ласка, надішліть логін та пароль від вашого аккаунта.\n" \
+                       "Наприклад: `login:password` або `email:password`"
+        if query:
+            await query.edit_message_text(request_text, parse_mode='Markdown', reply_markup=reply_markup)
         else:
-            await update.message.reply_text(message_text, parse_mode='Markdown')
-        context.user_data['awaiting_account_data'] = True
-        # Сохраняем детали заказа для передачи основателям позже
-        context.user_data['account_details_order'] = order_details
+            await update.message.reply_text(request_text, parse_mode='Markdown', reply_markup=reply_markup)
 
-    async def handle_account_data_message(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Обрабатывает сообщение с логином и паролем"""
-        user = update.effective_user
-        user_id = user.id
-        message_text = update.message.text.strip()
+    # --- Обработка оплаты после выбора товара ---
+    async def proceed_to_payment(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Обработка оплаты после выбора товара"""
+        query = update.callback_query
+        user_id = query.from_user.id
 
-        # Проверяем, ожидаем ли мы данные аккаунта
-        if not context.user_data.get('awaiting_account_data'):
+        if user_id not in active_conversations or 'order_details' not in active_conversations[user_id]:
+            await query.edit_message_text("❌ Не знайдено активного замовлення.")
             return
 
-        # Проверяем формат
-        if ':' in message_text:
-            parts = message_text.split(':', 1)
-        elif ' ' in message_text:
-            parts = message_text.split(' ', 1)
-        else:
-            await update.message.reply_text("❌ Неправильний формат. Використовуйте `login:password` або `login password`.")
+        order_text = active_conversations[user_id]['order_details']
+
+        # Извлекаем сумму в UAH
+        uah_amount = get_uah_amount_from_order_text(order_text)
+        if uah_amount <= 0:
+            await query.edit_message_text("❌ Не вдалося визначити суму для оплати.")
             return
 
-        login = parts[0]
-        password = parts[1]
-        order_details = context.user_data.get('account_details_order', 'Невідомі деталі замовлення')
-
-        account_info_message = (
-            f"🔐 Нові дані акаунту від користувача {user.first_name} (@{user.username or 'не вказано'}) (ID: {user_id}):\n"
-            f"Логін: `{login}`\n"
-            f"Пароль: `{password}`\n"
-            f"Деталі замовлення: {order_details}"
-        )
-
-        # Отправляем данные основателям
-        success_count = 0
-        for owner_id in [OWNER_ID_1, OWNER_ID_2]:
-            try:
-                await context.bot.send_message(chat_id=owner_id, text=account_info_message, parse_mode='Markdown')
-                success_count += 1
-            except Exception as e:
-                logger.error(f"Помилка надсилання даних акаунту основателю {owner_id}: {e}")
-
-        # Сообщаем пользователю
-        if success_count > 0:
-            await update.message.reply_text("✅ Дані акаунту успішно надіслано засновникам магазину. Дякуємо!")
-        else:
-            await update.message.reply_text("❌ Не вдалося надіслати дані акаунту. Будь ласка, зверніться до підтримки.")
-
-        # Очищаем состояние
-        context.user_data.pop('awaiting_account_data', None)
-        context.user_data.pop('payment_amount_usd', None)
-        context.user_data.pop('order_details_for_payment', None)
-        context.user_data.pop('account_details_order', None)
-        context.user_data.pop('nowpayments_invoice_id', None)
-        # Удаляем активный диалог, так как процесс завершен
-        if user_id in active_conversations:
-            del active_conversations[user_id]
-        delete_active_conversation(user_id)
-
-    # - Конец добавленных методов для оплаты -
-
-    # --- Исправленный обработчик /stats ---
-    async def stats_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Показывает статистику бота"""
-        user_id = update.effective_user.id
-        if user_id not in [OWNER_ID_1, OWNER_ID_2]:
-            logger.info(f"🚫 /stats: Доступ запрещен для пользователя {user_id}")
-            # Можно ничего не отвечать или отправить сообщение об ошибке
-            # await update.message.reply_text("❌ У вас немає доступу до цієї команди.")
+        # Конвертируем в USD
+        usd_amount = convert_uah_to_usd(uah_amount)
+        if usd_amount <= 0:
+            await query.edit_message_text("❌ Сума для оплати занадто мала.")
             return
 
-        logger.info(f"📊 /stats: Запрошена статистика основателем {user_id}")
-        total_users = get_total_users_count()
-        stats_text = f"""📊 Статистика бота:
-👥 Всього користувачів: {total_users}
-🛒 Всього замовлень: {bot_statistics['total_orders']}
-❓ Всього запитань: {bot_statistics['total_questions']}
-⏰ Останнє скидання: {bot_statistics['last_reset']}"""
-        await update.message.reply_text(stats_text)
-    # --- Конец исправленного обработчика /stats ---
+        # Сохраняем сумму в USD в контексте пользователя
+        context.user_data['payment_amount_usd'] = usd_amount
+        context.user_data['order_details_for_payment'] = order_text
 
-    async def continue_dialog_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Обработчик команды /dialog для основателей"""
-        # Логика продолжения диалога
-        pass # Заглушка, реализация не предоставлена
+        # Предлагаем выбрать метод оплаты
+        keyboard = [
+            [InlineKeyboardButton("💳 Оплата карткою", callback_data='pay_card')],
+            [InlineKeyboardButton("🪙 Криптовалюта", callback_data='pay_crypto')],
+            [InlineKeyboardButton("⬅️ Назад", callback_data='back_to_main')],
+            [InlineKeyboardButton("❓ Запитання", callback_data='question')]
+        ]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        await query.edit_message_text(f"💳 Оберіть метод оплати для суми {usd_amount}$:", reply_markup=reply_markup)
 
+    # --- Обработчик callback кнопок ---
     async def button_handler(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Обработчик нажатий на кнопки"""
         query = update.callback_query
         await query.answer()
         user = query.from_user
         user_id = user.id
+        data = query.data
 
         # Гарантируем наличие пользователя в БД
         ensure_user_exists(user)
 
-        # Главное меню
-        if query.data == 'order':
+        logger.info(f"📥 Callback received: data='{data}', from user_id={user_id}")
+
+        # --- Обработка кнопок главного меню ---
+        if data == 'order':
+            # Проверяем активные диалоги
+            if user_id in active_conversations:
+                await query.answer("❗ У вас вже є активний діалог.", show_alert=True)
+                return
+
             keyboard = [
                 [InlineKeyboardButton("💳 Підписки", callback_data='order_subscriptions')],
                 [InlineKeyboardButton("🎮 Цифрові товари", callback_data='order_digital')],
                 [InlineKeyboardButton("⬅️ Назад", callback_data='back_to_main')]
             ]
             reply_markup = InlineKeyboardMarkup(keyboard)
-            await query.edit_message_text("📦 Оберіть тип товару:", reply_markup=reply_markup)
+            await query.edit_message_text("🛍️ Оберіть тип замовлення:", reply_markup=reply_markup)
 
-        # Кнопка "Назад" в главное меню
-        elif query.data == 'back_to_main':
-            keyboard = [
-                [InlineKeyboardButton("🛒 Зробити замовлення", callback_data='order')],
-                [InlineKeyboardButton("❓ Поставити запитання", callback_data='question')],
-                [InlineKeyboardButton("ℹ️ Допомога", callback_data='help')]
-            ]
-            reply_markup = InlineKeyboardMarkup(keyboard)
-            await query.edit_message_text("Головне меню:", reply_markup=reply_markup)
-
-        # Меню Підписок
-        elif query.data == 'order_subscriptions':
-            keyboard = [
-                [InlineKeyboardButton("💬 ChatGPT Plus", callback_data='category_chatgpt')],
-                [InlineKeyboardButton("🎮 Discord Nitro", callback_data='category_discord')],
-                [InlineKeyboardButton("🎓 Duolingo Max", callback_data='category_duolingo')],
-                [InlineKeyboardButton("🎨 Picsart AI", callback_data='category_picsart')],
-                [InlineKeyboardButton("📊 Canva Pro", callback_data='category_canva')],
-                [InlineKeyboardButton("📺 Netflix", callback_data='category_netflix')],
-                [InlineKeyboardButton("⬅️ Назад", callback_data='back_to_main')]
-            ]
-            reply_markup = InlineKeyboardMarkup(keyboard)
-            await query.edit_message_text("💳 Оберіть підписку:", reply_markup=reply_markup)
-
-        # Меню Цифрових товарів
-        elif query.data == 'order_digital':
-            keyboard = [
-                [InlineKeyboardButton("🎮 Discord Прикраси", callback_data='category_discord_decor')], # Обновлено
-                [InlineKeyboardButton("⬅️ Назад", callback_data='back_to_main')]
-            ]
-            reply_markup = InlineKeyboardMarkup(keyboard)
-            await query.edit_message_text("🎮 Оберіть цифровий товар:", reply_markup=reply_markup) # Обновлено
-
-        # --- Меню Підписок ---
-        # Меню ChatGPT
-        elif query.data == 'category_chatgpt':
-            keyboard = [
-                [InlineKeyboardButton("1 місяць - 650 UAH", callback_data='chatgpt_1')],
-                [InlineKeyboardButton("12 місяців - 6500 UAH", callback_data='chatgpt_12')],
-                [InlineKeyboardButton("⬅️ Назад", callback_data='order_subscriptions')]
-            ]
-            await query.edit_message_text("💬 ChatGPT Plus:", reply_markup=InlineKeyboardMarkup(keyboard))
-
-        # Меню Discord
-        elif query.data == 'category_discord':
-            keyboard = [
-                [InlineKeyboardButton("Discord Nitro Basic 1м - 260 UAH", callback_data='discord_basic_1')],
-                [InlineKeyboardButton("Discord Nitro Basic 12м - 2600 UAH", callback_data='discord_basic_12')],
-                [InlineKeyboardButton("Discord Nitro Full 1м - 390 UAH", callback_data='discord_full_1')],
-                [InlineKeyboardButton("Discord Nitro Full 12м - 3900 UAH", callback_data='discord_full_12')],
-                [InlineKeyboardButton("⬅️ Назад", callback_data='order_subscriptions')]
-            ]
-            await query.edit_message_text("🎮 Discord Nitro:", reply_markup=InlineKeyboardMarkup(keyboard))
-
-        # Меню Duolingo
-        elif query.data == 'category_duolingo':
-            keyboard = [
-                [InlineKeyboardButton("Duolingo Max 1м - 520 UAH", callback_data='duolingo_1')],
-                [InlineKeyboardButton("Duolingo Max 12м - 5200 UAH", callback_data='duolingo_12')],
-                [InlineKeyboardButton("⬅️ Назад", callback_data='order_subscriptions')]
-            ]
-            await query.edit_message_text("🎓 Duolingo Max:", reply_markup=InlineKeyboardMarkup(keyboard))
-
-        # Меню Picsart
-        elif query.data == 'category_picsart':
-            keyboard = [
-                [InlineKeyboardButton("Picsart AI Plus", callback_data='picsart_plus')],
-                [InlineKeyboardButton("Picsart AI Pro", callback_data='picsart_pro')],
-                [InlineKeyboardButton("⬅️ Назад", callback_data='order_subscriptions')]
-            ]
-            await query.edit_message_text("🎨 Оберіть варіант Picsart AI:", reply_markup=InlineKeyboardMarkup(keyboard))
-
-        # Подменю Picsart Plus
-        elif query.data == 'picsart_plus':
-            keyboard = [
-                [InlineKeyboardButton("1 місяць - 400 UAH", callback_data='picsart_plus_1')],
-                [InlineKeyboardButton("12 місяців - 4000 UAH", callback_data='picsart_plus_12')],
-                [InlineKeyboardButton("⬅️ Назад", callback_data='category_picsart')]
-            ]
-            await query.edit_message_text("🎨 Picsart AI Plus:", reply_markup=InlineKeyboardMarkup(keyboard))
-
-        # Подменю Picsart Pro
-        elif query.data == 'picsart_pro':
-            keyboard = [
-                [InlineKeyboardButton("1 місяць - 520 UAH", callback_data='picsart_pro_1')],
-                [InlineKeyboardButton("12 місяців - 5200 UAH", callback_data='picsart_pro_12')],
-                [InlineKeyboardButton("⬅️ Назад", callback_data='category_picsart')]
-            ]
-            await query.edit_message_text("🎨 Picsart AI Pro:", reply_markup=InlineKeyboardMarkup(keyboard))
-
-        # Меню Canva
-        elif query.data == 'category_canva':
-            keyboard = [
-                [InlineKeyboardButton("Canva Pro Individual", callback_data='canva_ind')],
-                [InlineKeyboardButton("Canva Pro Family", callback_data='canva_fam')],
-                [InlineKeyboardButton("⬅️ Назад", callback_data='order_subscriptions')]
-            ]
-            await query.edit_message_text("📊 Оберіть варіант Canva Pro:", reply_markup=InlineKeyboardMarkup(keyboard))
-
-        # Подменю Canva Individual
-        elif query.data == 'canva_ind':
-            keyboard = [
-                [InlineKeyboardButton("1 місяць - 520 UAH", callback_data='canva_ind_1')],
-                [InlineKeyboardButton("12 місяців - 5200 UAH", callback_data='canva_ind_12')],
-                [InlineKeyboardButton("⬅️ Назад", callback_data='category_canva')]
-            ]
-            await query.edit_message_text("📊 Canva Pro (Individual):", reply_markup=InlineKeyboardMarkup(keyboard))
-
-        # Подменю Canva Family
-        elif query.data == 'canva_fam':
-            keyboard = [
-                [InlineKeyboardButton("1 місяць - 650 UAH", callback_data='canva_fam_1')],
-                [InlineKeyboardButton("12 місяців - 6500 UAH", callback_data='canva_fam_12')],
-                [InlineKeyboardButton("⬅️ Назад", callback_data='category_canva')]
-            ]
-            await query.edit_message_text("📊 Canva Pro (Family):", reply_markup=InlineKeyboardMarkup(keyboard))
-
-        # Меню Netflix
-        elif query.data == 'category_netflix':
-            keyboard = [
-                [InlineKeyboardButton("Netflix Mobile 1м - 260 UAH", callback_data='netflix_mob_1')],
-                [InlineKeyboardButton("Netflix Mobile 12м - 2600 UAH", callback_data='netflix_mob_12')],
-                [InlineKeyboardButton("Netflix Basic 1м - 390 UAH", callback_data='netflix_bas_1')],
-                [InlineKeyboardButton("Netflix Basic 12м - 3900 UAH", callback_data='netflix_bas_12')],
-                [InlineKeyboardButton("Netflix Standard 1м - 520 UAH", callback_data='netflix_std_1')],
-                [InlineKeyboardButton("Netflix Standard 12м - 5200 UAH", callback_data='netflix_std_12')],
-                [InlineKeyboardButton("Netflix Premium 1м - 650 UAH", callback_data='netflix_pre_1')],
-                [InlineKeyboardButton("Netflix Premium 12м - 6500 UAH", callback_data='netflix_pre_12')],
-                [InlineKeyboardButton("⬅️ Назад", callback_data='order_subscriptions')]
-            ]
-            await query.edit_message_text("📺 Оберіть підписку Netflix:", reply_markup=InlineKeyboardMarkup(keyboard))
-
-        # --- Меню Цифрових товарів ---
-        # Меню Discord Прикраси
-        elif query.data == 'category_discord_decor':
-            keyboard = [
-                [InlineKeyboardButton("Без Nitro", callback_data='discord_decor_without_nitro')],
-                [InlineKeyboardButton("З Nitro", callback_data='discord_decor_with_nitro')],
-                [InlineKeyboardButton("⬅️ Назад", callback_data='order_digital')]
-            ]
-            await query.edit_message_text("🎮 Оберіть тип прикраси Discord:", reply_markup=InlineKeyboardMarkup(keyboard)) # Обновлено
-
-        # Подменю Discord Прикраси Без Nitro
-        elif query.data == 'discord_decor_without_nitro':
-            keyboard = [
-                [InlineKeyboardButton("6$ - 180 UAH", callback_data='discord_decor_bzn_6')],
-                [InlineKeyboardButton("8$ - 240 UAH", callback_data='discord_decor_bzn_8')],
-                [InlineKeyboardButton("9$ - 265 UAH", callback_data='discord_decor_bzn_9')],
-                [InlineKeyboardButton("12$ - 355 UAH", callback_data='discord_decor_bzn_12')],
-                [InlineKeyboardButton("⬅️ Назад", callback_data='category_discord_decor')]
-            ]
-            await query.edit_message_text("🎮 Оберіть прикрасу Discord (Без Nitro):", reply_markup=InlineKeyboardMarkup(keyboard)) # Обновлено
-
-        # Подменю Discord Прикраси З Nitro
-        elif query.data == 'discord_decor_with_nitro':
-            keyboard = [
-                [InlineKeyboardButton("5$ - 145 UAH", callback_data='discord_decor_zn_5')],
-                [InlineKeyboardButton("7$ - 205 UAH", callback_data='discord_decor_zn_7')],
-                [InlineKeyboardButton("8.5$ - 250 UAH", callback_data='discord_decor_zn_8_5')],
-                [InlineKeyboardButton("9$ - 265 UAH", callback_data='discord_decor_zn_9')],
-                [InlineKeyboardButton("14$ - 410 UAH", callback_data='discord_decor_zn_14')],
-                [InlineKeyboardButton("22$ - 650 UAH", callback_data='discord_decor_zn_22')],
-                [InlineKeyboardButton("⬅️ Назад", callback_data='category_discord_decor')]
-            ]
-            await query.edit_message_text("🎮 Оберіть прикрасу Discord (З Nitro):", reply_markup=InlineKeyboardMarkup(keyboard)) # Обновлено
-
-        # --- Обработка выбора конкретного товара ---
-        # Пример для одного товара, остальные по аналогии
-        elif query.data.startswith('chatgpt_') or \
-             query.data.startswith('discord_') or \
-             query.data.startswith('duolingo_') or \
-             query.data.startswith('picsart_') or \
-             query.data.startswith('canva_') or \
-             query.data.startswith('netflix_') or \
-             query.data.startswith('discord_decor_'):
-
-            # Определяем тип заказа
-            conversation_type = 'subscription_order' if not query.data.startswith('discord_decor_') else 'digital_order'
-
-            # Извлекаем информацию из callback_data
-            # Это упрощенный пример, можно сделать более сложный парсер
-            item_map = {
-                # ChatGPT
-                'chatgpt_1': ("ChatGPT Plus", "1 місяць", 650),
-                'chatgpt_12': ("ChatGPT Plus", "12 місяців", 6500),
-                # Discord
-                'discord_basic_1': ("Discord Nitro Basic", "1 місяць", 260),
-                'discord_basic_12': ("Discord Nitro Basic", "12 місяців", 2600),
-                'discord_full_1': ("Discord Nitro Full", "1 місяць", 390),
-                'discord_full_12': ("Discord Nitro Full", "12 місяців", 3900),
-                # Duolingo
-                'duolingo_1': ("Duolingo Max", "1 місяць", 520),
-                'duolingo_12': ("Duolingo Max", "12 місяців", 5200),
-                # Picsart Plus
-                'picsart_plus_1': ("Picsart AI Plus", "1 місяць", 400),
-                'picsart_plus_12': ("Picsart AI Plus", "12 місяців", 4000),
-                # Picsart Pro
-                'picsart_pro_1': ("Picsart AI Pro", "1 місяць", 520),
-                'picsart_pro_12': ("Picsart AI Pro", "12 місяців", 5200),
-                # Canva Individual
-                'canva_ind_1': ("Canva Pro Individual", "1 місяць", 520),
-                'canva_ind_12': ("Canva Pro Individual", "12 місяців", 5200),
-                # Canva Family
-                'canva_fam_1': ("Canva Pro Family", "1 місяць", 650),
-                'canva_fam_12': ("Canva Pro Family", "12 місяців", 6500),
-                # Netflix
-                'netflix_mob_1': ("Netflix Mobile", "1 місяць", 260),
-                'netflix_mob_12': ("Netflix Mobile", "12 місяців", 2600),
-                'netflix_bas_1': ("Netflix Basic", "1 місяць", 390),
-                'netflix_bas_12': ("Netflix Basic", "12 місяців", 3900),
-                'netflix_std_1': ("Netflix Standard", "1 місяць", 520),
-                'netflix_std_12': ("Netflix Standard", "12 місяців", 5200),
-                'netflix_pre_1': ("Netflix Premium", "1 місяць", 650),
-                'netflix_pre_12': ("Netflix Premium", "12 місяців", 6500),
-                # Discord Прикраси Без Nitro
-                'discord_decor_bzn_6': ("Discord Прикраса (Без Nitro)", "6$", 180),
-                'discord_decor_bzn_8': ("Discord Прикраса (Без Nitro)", "8$", 240),
-                'discord_decor_bzn_9': ("Discord Прикраса (Без Nitro)", "9$", 265),
-                'discord_decor_bzn_12': ("Discord Прикраса (Без Nitro)", "12$", 355),
-                # Discord Прикраси З Nitro
-                'discord_decor_zn_5': ("Discord Прикраса (З Nitro)", "5$", 145),
-                'discord_decor_zn_7': ("Discord Прикраса (З Nitro)", "7$", 205),
-                'discord_decor_zn_8_5': ("Discord Прикраса (З Nitro)", "8.5$", 250),
-                'discord_decor_zn_9': ("Discord Прикраса (З Nitro)", "9$", 265),
-                'discord_decor_zn_14': ("Discord Прикраса (З Nitro)", "14$", 410),
-                'discord_decor_zn_22': ("Discord Прикраса (З Nitro)", "22$", 650),
-            }
-
-            if query.data in item_map:
-                service_name, period, price_uah = item_map[query.data]
-                order_text = f"📦 Замовлення:\n  • {service_name} ({period}) - {price_uah} UAH\n💳 Всього: {price_uah} UAH"
-
-                # Проверяем активные диалоги
-                if user_id in active_conversations:
-                     await query.answer("❗ У вас вже є активний діалог.", show_alert=True)
-                     return
-
-                # Создаем запись о заказе
-                active_conversations[user_id] = {
-                    'type': conversation_type,
-                    'user_info': user,
-                    'assigned_owner': None,
-                    'last_message': order_text,
-                    'order_details': order_text
-                }
-                # Сохраняем в БД
-                save_active_conversation(user_id, conversation_type, None, order_text)
-                # Обновляем статистику
-                bot_statistics['total_orders'] += 1
-                save_stats()
-
-                # Отправляем подтверждение пользователю
-                keyboard = [
-                    [InlineKeyboardButton("💳 Оплатити", callback_data='proceed_to_payment')],
-                    [InlineKeyboardButton("⬅️ Назад", callback_data='back_to_main')]
-                ]
-                reply_markup = InlineKeyboardMarkup(keyboard)
-                confirmation_text = f"""✅ Ваше замовлення прийнято!
-{order_text}
-Будь ласка, оберіть дію 👇"""
-                await query.edit_message_text(confirmation_text.strip(), reply_markup=reply_markup)
-            else:
-                await query.edit_message_text("❌ Не вдалося обробити замовлення. Спробуйте ще раз.")
-
-        # --- Обработка оплаты после выбора товара ---
-        elif query.data == 'proceed_to_payment':
-            if user_id not in active_conversations or 'order_details' not in active_conversations[user_id]:
-                await query.edit_message_text("❌ Не знайдено активного замовлення.")
-                return
-
-            order_text = active_conversations[user_id]['order_details']
-
-            # Извлекаем сумму в UAH
-            uah_amount = get_uah_amount_from_order_text(order_text)
-            if uah_amount <= 0:
-                await query.edit_message_text("❌ Не вдалося визначити суму для оплати.")
-                return
-
-            # Конвертируем в USD
-            usd_amount = convert_uah_to_usd(uah_amount)
-            if usd_amount <= 0:
-                await query.edit_message_text("❌ Сума для оплати занадто мала.")
-                return
-
-            # Сохраняем сумму в USD в контексте пользователя
-            context.user_data['payment_amount_usd'] = usd_amount
-            context.user_data['order_details_for_payment'] = order_text
-
-            # Предлагаем выбрать метод оплаты
-            keyboard = [
-                [InlineKeyboardButton("💳 Оплата карткою", callback_data='pay_card')],
-                [InlineKeyboardButton("🪙 Криптовалюта", callback_data='pay_crypto')],
-                [InlineKeyboardButton("⬅️ Назад", callback_data='back_to_main')],
-                [InlineKeyboardButton("❓ Запитання", callback_data='question')]
-            ]
-            reply_markup = InlineKeyboardMarkup(keyboard)
-            await query.edit_message_text(f"💳 Оберіть метод оплати для суми {usd_amount}$:", reply_markup=reply_markup)
-
-        # --- Добавлено: Кнопка "Запитання" ---
-        elif query.data == 'question':
+        elif data == 'question':
             # Проверяем активные диалоги
             if user_id in active_conversations:
-                await query.answer(
-                    "❗ У вас вже є активний діалог.\n"
-                    "Будь ласка, продовжуйте писати в поточному діалозі або завершіть його командою /stop.",
-                    show_alert=True
-                )
+                await query.answer("❗ У вас вже є активний діалог."
+                                   "Будь ласка, продовжуйте писати в поточному діалозі або завершіть його командою /stop, "
+                                   "якщо хочете почати новий діалог.", show_alert=True)
                 return
 
-            # Создаем запись о вопросе
             active_conversations[user_id] = {
                 'type': 'question',
                 'user_info': user,
@@ -1661,176 +1036,161 @@ class TelegramBot:
             }
             # Сохраняем в БД
             save_active_conversation(user_id, 'question', None, "Нове запитання")
+
             # Обновляем статистику
+            global bot_statistics
             bot_statistics['total_questions'] += 1
             save_stats()
 
             await query.edit_message_text(
-                "📝 Напишіть ваше запитання. Я передам його засновнику магазину.\n"
+                "📝 Напишіть ваше запитання. Я передам його засновнику магазину."
                 "Щоб завершити цей діалог пізніше, використайте команду /stop."
             )
-        # --- Конец добавленного ---
 
+        elif data == 'help':
+            await self.show_help(query, context)
+
+        elif data == 'channel':
+            channel_link = "https://t.me/+KzJ3F1D00b0zZjFi" # Замените на вашу ссылку
+            await query.edit_message_text(f"📢 Наш канал: {channel_link}")
+
+        elif data == 'back_to_main':
+            keyboard = [
+                [InlineKeyboardButton("🛒 Зробити замовлення", callback_data='order')],
+                [InlineKeyboardButton("❓ Поставити запитання", callback_data='question')],
+                [InlineKeyboardButton("ℹ️ Допомога", callback_data='help')],
+                [InlineKeyboardButton("📢 Наш канал", callback_data='channel')]
+            ]
+            reply_markup = InlineKeyboardMarkup(keyboard)
+            welcome_text = f"""👋 Привіт, {user.first_name}!
+
+Ласкаво просимо до магазину **SecureShop**!
+
+Тут ви можете:
+▫️ Зробити замовлення підписок або цифрових товарів
+▫️ Задати питання нашим менеджерам
+▫️ Отримати інформацію про наші товари
+
+Оберіть дію 👇"""
+            await query.edit_message_text(welcome_text, reply_markup=reply_markup, parse_mode='Markdown')
+
+        # --- Обработка кнопок заказа ---
+        elif data == 'order_subscriptions':
+            await query.edit_message_text(
+                "📝 Напишіть деталі замовлення підписки.\n"
+                "Наприклад: `Discord Full (1 місяць) - 170 UAH`",
+                parse_mode='Markdown'
+            )
+            # Создаем запись о заказе
+            active_conversations[user_id] = {
+                'type': 'subscription_order',
+                'user_info': user,
+                'assigned_owner': None,
+                'last_message': "Нове замовлення підписки"
+            }
+            # Сохраняем в БД
+            save_active_conversation(user_id, 'subscription_order', None, "Нове замовлення підписки")
+
+        elif data == 'order_digital':
+            await query.edit_message_text(
+                "📝 Напишіть деталі замовлення цифрового товару.\n"
+                "Наприклад: `Discord Прикраси (Boost Nitro) - 180 UAH`",
+                parse_mode='Markdown'
+            )
+            # Создаем запись о заказе
+            active_conversations[user_id] = {
+                'type': 'digital_order',
+                'user_info': user,
+                'assigned_owner': None,
+                'last_message': "Нове замовлення цифрового товару"
+            }
+            # Сохраняем в БД
+            save_active_conversation(user_id, 'digital_order', None, "Нове замовлення цифрового товару")
+
+        # --- Обработка оплаты после выбора товара ---
+        elif data == 'proceed_to_payment':
+            await self.proceed_to_payment(update, context)
+
+        # --- Добавленные/обновлённые вспомогательные функции ---
+        elif data == 'request_account_data':
+            await self.request_account_data(update, context)
+
+    # --- Обработчик текстовых сообщений ---
     async def handle_message(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Обработчик текстовых сообщений"""
         user = update.effective_user
         user_id = user.id
-        message_text = update.message.text.strip()
+        message_text = update.message.text
 
         # Гарантируем наличие пользователя в БД
         ensure_user_exists(user)
 
-        # Если ожидаем данные аккаунта
-        if context.user_data.get('awaiting_account_data'):
-            await self.handle_account_data_message(update, context)
+        # 🔴 КРИТИЧЕСКОЕ ИСПРАВЛЕНИЕ: сначала проверяем владельца
+        if user_id in [OWNER_ID_1, OWNER_ID_2]:
+            await self.handle_owner_message(update, context)
             return
 
-        # Проверяем активные диалоги
+        # Проверяем существование диалога
         if user_id not in active_conversations:
-            # Если нет активного диалога, можно предложить начать новый или проигнорировать
-            # В данном случае просто игнорируем
-            return
-
-        conversation = active_conversations[user_id]
-        conversation_type = conversation['type']
-        assigned_owner = conversation.get('assigned_owner')
-
-        # Сохраняем последнее сообщение
-        conversation['last_message'] = message_text
-        save_active_conversation(user_id, conversation_type, assigned_owner, message_text)
-        save_message(user_id, message_text, True) # True означает, что сообщение от пользователя
-
-        # Логика обработки сообщений в зависимости от типа диалога
-        if conversation_type == 'order':
-            # Логика обработки заказа
-            # Пересылаем сообщение основателю(ям)
-            # В реальной реализации нужно определить, какому основателю отправлять
-            for owner_id in [OWNER_ID_1, OWNER_ID_2]:
-                try:
-                    # Отправляем сообщение основателю
-                    await context.bot.send_message(
-                        chat_id=owner_id,
-                        text=f"📦 Нове замовлення від користувача {user.first_name} (@{user.username or 'не вказано'}) (ID: {user_id}):\n{message_text}"
-                    )
-                    # Назначаем этого основателя, если диалог еще не назначен
-                    if not assigned_owner:
-                        conversation['assigned_owner'] = owner_id
-                        owner_client_map[owner_id] = user_id
-                        save_active_conversation(user_id, conversation_type, owner_id, message_text)
-                        # Отправляем уведомление основателю о назначении
-                        await context.bot.send_message(
-                            chat_id=owner_id,
-                            text=f"📌 Вам призначено діалог з користувачем {user.first_name} (ID: {user_id})."
-                        )
-                except Exception as e:
-                    logger.error(f"❌ Ошибка отправки сообщения основателю {owner_id}: {e}")
-
-        elif conversation_type == 'question':
-            # Логика обработки вопроса
-            # Пересылаем сообщение основателю(ям)
-            for owner_id in [OWNER_ID_1, OWNER_ID_2]:
-                try:
-                    # Отправляем сообщение основателю
-                    await context.bot.send_message(
-                        chat_id=owner_id,
-                        text=f"❓ Нове запитання від користувача {user.first_name} (@{user.username or 'не вказано'}) (ID: {user_id}):\n{message_text}"
-                    )
-                    # Назначаем этого основателя, если диалог еще не назначен
-                    if not assigned_owner:
-                        conversation['assigned_owner'] = owner_id
-                        owner_client_map[owner_id] = user_id
-                        save_active_conversation(user_id, conversation_type, owner_id, message_text)
-                        # Отправляем уведомление основателю о назначении
-                        await context.bot.send_message(
-                            chat_id=owner_id,
-                            text=f"📌 Вам призначено діалог з користувачем {user.first_name} (ID: {user_id})."
-                        )
-                except Exception as e:
-                    logger.error(f"❌ Ошибка отправки сообщения основателю {owner_id}: {e}")
-
-        elif conversation_type == 'manual':
-            # Логика обработки ручного диалога (например, после команды /dialog)
-            if assigned_owner:
-                try:
-                    # Отправляем сообщение назначеному основателю
-                    await context.bot.send_message(
-                        chat_id=assigned_owner,
-                        text=f"💬 Повідомлення від користувача {user.first_name} (ID: {user_id}):\n{message_text}"
-                    )
-                except Exception as e:
-                    logger.error(f"❌ Ошибка отправки сообщения основателю {assigned_owner}: {e}")
-            else:
-                # Если диалог не назначен, уведомляем пользователя
-                await update.message.reply_text("❌ Ваш діалог ще не призначено основателю. Зачекайте.")
-
-    async def handle_document(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Обработчик документов (для заказов из файлов)"""
-        user = update.effective_user
-        user_id = user.id
-        document = update.message.document
-
-        # Гарантируем наличие пользователя в БД
-        ensure_user_exists(user)
-
-        # Проверяем активные диалоги
-        if user_id in active_conversations:
+            keyboard = [
+                [InlineKeyboardButton("🛒 Зробити замовлення", callback_data='order')],
+                [InlineKeyboardButton("❓ Поставити запитання", callback_data='question')],
+                [InlineKeyboardButton("ℹ️ Допомога", callback_data='help')]
+            ]
+            reply_markup = InlineKeyboardMarkup(keyboard)
             await update.message.reply_text(
-                "❗ У вас вже є активний діалог.\n"
-                "Будь ласка, продовжуйте писати в поточному діалозі або завершіть його командою /stop, "
-                "якщо хочете почати новий діалог."
+                "Будь ласка, оберіть дію або використайте /start, щоб розпочати.",
+                reply_markup=reply_markup
             )
             return
 
-        # Проверяем тип файла
-        if document.mime_type != 'application/json':
-            await update.message.reply_text("❌ Підтримуються тільки JSON файли.")
-            return
+        # Сохраняем последнее сообщение
+        active_conversations[user_id]['last_message'] = message_text
+        # Сохраняем сообщение от пользователя
+        save_message(user_id, message_text, True)
+        # Обновляем активный диалог в БД
+        save_active_conversation(
+            user_id,
+            active_conversations[user_id]['type'],
+            active_conversations[user_id].get('assigned_owner'),
+            message_text
+        )
 
-        try:
-            # Скачиваем файл
-            file = await context.bot.get_file(document.file_id)
-            file_bytes = await file.download_as_bytearray()
-            # Декодируем JSON
-            order_data = json.loads(file_bytes.decode('utf-8'))
+        # Логика обработки сообщений в зависимости от типа диалога
+        conversation_type = active_conversations[user_id]['type']
 
-            # Пример обработки JSON (адаптируйте под ваш формат)
-            # Предположим, JSON имеет структуру: {"order_id": "...", "items": [{"service": "...", "plan": "...", "period": "...", "price_uah": ...}]}
-            order_id = order_data.get('order_id', 'N/A')
-            items = order_data.get('items', [])
+        if conversation_type in ['subscription_order', 'digital_order']:
+            # Обработка заказа
+            order_text = message_text
+            # Извлекаем сумму в UAH
+            uah_amount = get_uah_amount_from_order_text(order_text)
+            if uah_amount <= 0:
+                 # Простая логика определения суммы
+                 match_price = re.search(r'(\d+(?:\.\d+)?)\s*(UAH|грн)', order_text, re.IGNORECASE)
+                 if match_price:
+                     uah_amount = float(match_price.group(1))
+                 else:
+                     await update.message.reply_text("❌ Не вдалося визначити суму для оплати. Вкажіть суму в UAH.")
+                     return
 
-            if not items:
-                await update.message.reply_text("❌ JSON файл не містить товарів.")
+            # Конвертируем в USD
+            usd_amount = convert_uah_to_usd(uah_amount)
+            if usd_amount <= 0:
+                await update.message.reply_text("❌ Сума для оплати занадто мала.")
                 return
 
-            order_lines = [f"📦 Замовлення #{order_id} (з файлу):"]
-            total_uah = 0
-            for item in items:
-                service = item.get('service', 'Невідомо')
-                plan = item.get('plan', 'Невідомо')
-                period = item.get('period', 'Невідомо')
-                price_uah = item.get('price_uah', 0)
-                total_uah += price_uah
-                order_lines.append(f"  • {service} {plan} ({period}) - {price_uah} UAH")
+            # Сохраняем детали заказа и сумму в контексте
+            active_conversations[user_id]['order_details'] = order_text
+            context.user_data['payment_amount_usd'] = usd_amount
+            context.user_data['order_details_for_payment'] = order_text
 
-            order_lines.append(f"💳 Всього: {total_uah} UAH")
-            order_text = "\n".join(order_lines)
-
-            # Определяем тип заказа (простая логика)
-            conversation_type = 'subscription_order' # или 'digital_order' в зависимости от содержимого
-
-            # Создаем запись о заказе
-            active_conversations[user_id] = {
-                'type': conversation_type,
-                'user_info': user,
-                'assigned_owner': None,
-                'last_message': order_text,
-                'order_details': order_text
-            }
-            # Сохраняем в БД
-            save_active_conversation(user_id, conversation_type, None, order_text)
             # Обновляем статистику
+            global bot_statistics
             bot_statistics['total_orders'] += 1
             save_stats()
+
+            # Сохраняем в БД
+            save_active_conversation(user_id, conversation_type, None, order_text)
 
             # Отправляем подтверждение пользователю
             keyboard = [
@@ -1838,55 +1198,513 @@ class TelegramBot:
                 [InlineKeyboardButton("⬅️ Назад", callback_data='back_to_main')]
             ]
             reply_markup = InlineKeyboardMarkup(keyboard)
-            confirmation_text = f"""✅ Ваше замовлення з файлу прийнято!
+            confirmation_text = f"""✅ Ваше замовлення прийнято!
 {order_text}
 Будь ласка, оберіть дію 👇"""
+
             await update.message.reply_text(confirmation_text.strip(), reply_markup=reply_markup)
 
-        except json.JSONDecodeError:
-            await update.message.reply_text("❌ Неправильний формат JSON файлу.")
+        elif conversation_type == 'question':
+            # Пересылаем вопрос основателям
+            await self.forward_question_to_owners(context, user_id, user, message_text)
+            await update.message.reply_text("✅ Ваше запитання надіслано. Очікуйте відповіді від нашого менеджера.")
+
+    async def handle_json_file(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Обработчик JSON файлов с заказами"""
+        user = update.effective_user
+        user_id = user.id
+
+        # Гарантируем наличие пользователя в БД
+        ensure_user_exists(user)
+
+        # Проверяем активные диалоги
+        if user_id in active_conversations:
+            await update.message.reply_text(
+                "❗ У вас вже є активний діалог."
+                "Будь ласка, завершіть його командою /stop, "
+                "якщо хочете зробити нове замовлення з файлу."
+            )
+            return
+
+        # Получаем файл
+        file = await update.message.document.get_file()
+        file_path = file.file_path
+
+        # Скачиваем содержимое
+        url = f"https://api.telegram.org/file/bot{BOT_TOKEN}/{file_path}"
+        response = requests.get(url)
+        if response.status_code != 200:
+            logger.error(f"Не вдалося завантажити файл: {response.status_code}")
+            await update.message.reply_text("❌ Не вдалося обробити файл. Спробуйте ще раз.")
+            return
+
+        try:
+            order_data = response.json()
         except Exception as e:
-            logger.error(f"❌ Ошибка обработки JSON файла: {e}")
-            await update.message.reply_text(f"❌ Помилка обробки файлу: {e}")
+            logger.error(f"Помилка парсингу JSON: {e}")
+            await update.message.reply_text("❌ Файл має неправильний формат JSON.")
+            return
 
-    async def error_handler(self, update: object, context: ContextTypes.DEFAULT_TYPE):
+        # Проверяем структуру заказа
+        if 'items' not in order_data or 'total' not in order_data:
+            await update.message.reply_text("❌ У файлі відсутні обов'язкові поля (items, total).")
+            return
+
+        # Формируем текст заказа
+        order_text = "🛍️ Замовлення з сайту (з файлу):"
+        for item in order_data['items']:
+            order_text += f"\n▫️ {item['service']} {item.get('plan', '')} ({item['period']}) - {item['price']} UAH"
+        order_text += f"\n💳 Всього: {order_data['total']} UAH"
+
+        # Определяем тип заказа (простая логика, можно усложнить)
+        has_digital = any("Прикраси" in item.get('service', '') for item in order_data['items']) # Обновлено
+        conversation_type = 'digital_order' if has_digital else 'subscription_order'
+
+        # Создаем запись о заказе
+        active_conversations[user_id] = {
+            'type': conversation_type,
+            'user_info': user,
+            'assigned_owner': None,
+            'last_message': order_text,
+            'order_details': order_text
+        }
+
+        # Сохраняем в БД
+        save_active_conversation(user_id, conversation_type, None, order_text)
+
+        # Обновляем статистику
+        global bot_statistics
+        bot_statistics['total_orders'] += 1
+        save_stats()
+
+        # Отправляем подтверждение пользователю
+        keyboard = [
+            [InlineKeyboardButton("💳 Оплатити", callback_data='proceed_to_payment')],
+            [InlineKeyboardButton("⬅️ Назад", callback_data='back_to_main')]
+        ]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        confirmation_text = f"""✅ Ваше замовлення з файлу прийнято!
+{order_text}
+Будь ласка, оберіть дію 👇"""
+
+        await update.message.reply_text(confirmation_text.strip(), reply_markup=reply_markup)
+
+    # --- Команды для основателей ---
+    async def stats_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Обработчик команды /stats для основателей"""
+        user_id = update.effective_user.id
+        if user_id not in [OWNER_ID_1, OWNER_ID_2]:
+            return # Игнорируем для обычных пользователей
+
+        # Загружаем актуальную статистику из БД
+        load_stats()
+
+        stats_text = f"""📈 **Статистика бота SecureShop:**
+
+👥 Користувачів: {bot_statistics['total_users']}
+🛒 Замовлень: {bot_statistics['total_orders']}
+❓ Запитань: {bot_statistics['total_questions']}
+⏰ Останнє скидання: {bot_statistics['last_reset']}"""
+        await update.message.reply_text(stats_text, parse_mode='Markdown')
+
+    async def show_active_chats(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Показывает активные чаты для основателей с кнопкой продолжить"""
+        owner_id = update.effective_user.id
+        if owner_id not in [OWNER_ID_1, OWNER_ID_2]:
+            return
+
+        try:
+            with get_db_connection() as conn:
+                with conn.cursor(row_factory=dict_row) as cur:
+                    cur.execute("""
+                        SELECT ac.*, u.first_name, u.username
+                        FROM active_conversations ac
+                        JOIN users u ON ac.user_id = u.id
+                        ORDER BY ac.updated_at DESC
+                    """)
+                    active_chats = cur.fetchall()
+
+                    if not active_chats:
+                        await update.message.reply_text("ℹ️ Нет активных чатов.")
+                        return
+
+                    message = "🔄 Активные чаты:"
+                    keyboard = []
+                    for chat in active_chats:
+                        # Получаем актуальную информацию о пользователе
+                        client_info = {'first_name': chat['first_name'] or 'Неизвестный', 'username': chat['username'] or 'N/A'}
+                        # Добавим информацию о назначенном владельце
+                        owner_info = "Не назначен"
+                        if chat['assigned_owner']:
+                            if chat['assigned_owner'] == OWNER_ID_1:
+                                owner_info = "@HiGki2pYYY"
+                            elif chat['assigned_owner'] == OWNER_ID_2:
+                                owner_info = "@oc33t"
+                            else:
+                                owner_info = f"ID:{chat['assigned_owner']}"
+
+                        message += f"\n\n▫️ **Клієнт:** {client_info['first_name']} (@{client_info['username']})"
+                        message += f"\n  ▫️ Тип: {chat['type']}"
+                        message += f"\n  ▫️ Призначено: {owner_info}"
+                        message += f"\n  ▫️ Останнє повідомлення: {chat['last_message'][:50]}..."
+                        # Добавляем кнопку "Продолжить"
+                        keyboard.append([InlineKeyboardButton(
+                            f"Продовжити діалог з {client_info['first_name']}",
+                            callback_data=f'continue_chat_{chat["user_id"]}'
+                        )])
+                    reply_markup = InlineKeyboardMarkup(keyboard)
+                    await update.message.reply_text(message.strip(), reply_markup=reply_markup, parse_mode='Markdown')
+        except Exception as e:
+            logger.error(f"❌ Ошибка получения активных чатов: {e}")
+            await update.message.reply_text("❌ Произошла ошибка при получении активных чатов.")
+
+    async def show_conversation_history(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Показывает историю переписки с пользователем"""
+        owner_id = update.effective_user.id
+        if owner_id not in [OWNER_ID_1, OWNER_ID_2]:
+            return
+
+        if not context.args:
+            await update.message.reply_text("❌ Вкажіть ID користувача. Наприклад: /history 123456789")
+            return
+
+        try:
+            target_user_id = int(context.args[0])
+        except ValueError:
+            await update.message.reply_text("❌ Неправильний формат ID користувача.")
+            return
+
+        try:
+            with get_db_connection() as conn:
+                with conn.cursor(row_factory=dict_row) as cur:
+                    # Получаем историю сообщений
+                    cur.execute("""
+                        SELECT * FROM message_history
+                        WHERE user_id = %s
+                        ORDER BY timestamp ASC
+                    """, (target_user_id,))
+                    messages = cur.fetchall()
+
+                    if not messages:
+                        await update.message.reply_text(f"ℹ️ Історія повідомлень для користувача {target_user_id} порожня.")
+                        return
+
+                    # Получаем информацию о пользователе
+                    cur.execute("SELECT first_name, username FROM users WHERE id = %s", (target_user_id,))
+                    user_info = cur.fetchone()
+                    user_display = f"{user_info['first_name']} (@{user_info['username']})" if user_info else f"ID:{target_user_id}"
+
+                    history_text = f"📖 **Історія переписки з {user_display}:**\n\n"
+                    for msg in messages:
+                        sender = "Клієнт" if msg['is_from_user'] else "Менеджер"
+                        timestamp = msg['timestamp'].strftime('%Y-%m-%d %H:%M:%S')
+                        history_text += f"**[{timestamp}] {sender}:** {msg['message']}\n"
+
+                    # Разбиваем длинный текст, если нужно
+                    if len(history_text) > 4096:
+                        parts = [history_text[i:i+4096] for i in range(0, len(history_text), 4096)]
+                        for part in parts:
+                            await update.message.reply_text(part, parse_mode='Markdown')
+                    else:
+                        await update.message.reply_text(history_text, parse_mode='Markdown')
+
+        except Exception as e:
+            logger.error(f"❌ Ошибка получения истории для {target_user_id}: {e}")
+            await update.message.reply_text("❌ Произошла ошибка при получении истории.")
+
+    async def clear_active_chats(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Очищает все активные диалоги (БД)"""
+        owner_id = update.effective_user.id
+        if owner_id not in [OWNER_ID_1, OWNER_ID_2]:
+            return
+
+        try:
+            with get_db_connection() as conn:
+                with conn.cursor() as cur:
+                    cur.execute("DELETE FROM active_conversations")
+                    conn.commit()
+                    # Также очищаем локальный кэш
+                    active_conversations.clear()
+            await update.message.reply_text("✅ Всі активні діалоги очищено.")
+            logger.info(f"🗑️ Активные диалоги очищены администратором {owner_id}")
+        except Exception as e:
+            logger.error(f"❌ Ошибка очистки активных диалогов админом {owner_id}: {e}")
+            await update.message.reply_text("❌ Помилка при очищенні активних діалогів.")
+
+    async def continue_dialog_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Обработчик команды /dialog для основателей"""
+        owner_id = update.effective_user.id
+        if owner_id not in [OWNER_ID_1, OWNER_ID_2]:
+            return
+
+        if not context.args:
+            await update.message.reply_text("❌ Вкажіть ID користувача. Наприклад: /dialog 123456789")
+            return
+
+        try:
+            target_user_id = int(context.args[0])
+        except ValueError:
+            await update.message.reply_text("❌ Неправильний формат ID користувача.")
+            return
+
+        try:
+            with get_db_connection() as conn:
+                with conn.cursor(row_factory=dict_row) as cur:
+                    # Проверяем, существует ли пользователь
+                    cur.execute("SELECT first_name, username FROM users WHERE id = %s", (target_user_id,))
+                    user_info = cur.fetchone()
+                    if not user_info:
+                        await update.message.reply_text("❌ Користувача з таким ID не знайдено.")
+                        return
+
+                    # Проверяем, есть ли активный диалог
+                    cur.execute("SELECT type, last_message FROM active_conversations WHERE user_id = %s", (target_user_id,))
+                    conversation = cur.fetchone()
+                    if not conversation:
+                        # Создаем новый диалог, если его нет
+                        conv_type = 'manual_dialog' # Тип для ручного начала диалога
+                        last_message = "Діалог розпочато вручну адміністратором"
+                        cur.execute("""
+                            INSERT INTO active_conversations (user_id, type, assigned_owner, last_message, updated_at)
+                            VALUES (%s, %s, %s, %s, CURRENT_TIMESTAMP)
+                            ON CONFLICT (user_id) DO UPDATE SET
+                                type = EXCLUDED.type,
+                                assigned_owner = EXCLUDED.assigned_owner,
+                                last_message = EXCLUDED.last_message,
+                                updated_at = CURRENT_TIMESTAMP
+                        """, (target_user_id, conv_type, owner_id, last_message))
+                        conn.commit()
+
+                        # Также обновляем локальный кэш
+                        active_conversations[target_user_id] = {
+                            'type': conv_type,
+                            'user_info': User(id=target_user_id, first_name=user_info['first_name'], username=user_info['username']),
+                            'assigned_owner': owner_id,
+                            'last_message': last_message
+                        }
+
+                    else:
+                        # Если диалог есть, обновляем владельца
+                        cur.execute("""
+                            UPDATE active_conversations
+                            SET assigned_owner = %s, updated_at = CURRENT_TIMESTAMP
+                            WHERE user_id = %s
+                        """, (owner_id, target_user_id))
+                        conn.commit()
+
+                        # Также обновляем локальный кэш
+                        if target_user_id in active_conversations:
+                            active_conversations[target_user_id]['assigned_owner'] = owner_id
+
+                    user_display = f"{user_info['first_name']} (@{user_info['username']})" if user_info else f"ID:{target_user_id}"
+                    await update.message.reply_text(f"✅ Ви почали діалог з {user_display}. Тепер всі повідомлення від цього користувача будуть пересилатися вам.")
+
+                    # Устанавливаем связь владелец-клиент
+                    owner_client_map[owner_id] = target_user_id
+
+        except Exception as e:
+            logger.error(f"❌ Ошибка продолжения диалога с {target_user_id} для админа {owner_id}: {e}")
+            await update.message.reply_text("❌ Помилка при спробі продовжити діалог.")
+
+    async def payout_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Обработчик команды /payout для основателей"""
+        logger.info("📥 /payout команда получена")
+        user = update.effective_user
+        user_id = user.id
+
+        # Проверяем, является ли пользователь основателем
+        if user_id not in [OWNER_ID_1, OWNER_ID_2]:
+            await update.message.reply_text("❌ У вас немає прав для цієї команди.")
+            return
+
+        # Проверяем аргументы команды
+        if len(context.args) < 2:
+            await update.message.reply_text("❌ Неправильний формат команди. Використовуйте: /payout <user_id> <amount_uah>")
+            return
+
+        try:
+            target_user_id = int(context.args[0])
+            uah_amount = float(context.args[1])
+        except ValueError:
+            await update.message.reply_text("❌ Неправильний формат ID користувача або суми.")
+            return
+
+        if uah_amount <= 0:
+            await update.message.reply_text("❌ Сума повинна бути більше 0.")
+            return
+
+        # Конвертируем в USD
+        usd_amount = convert_uah_to_usd(uah_amount)
+        if usd_amount <= 0:
+            await update.message.reply_text("❌ Сума для оплати занадто мала.")
+            return
+
+        # Сохраняем данные в контексте
+        # - Исправлено: сохраняем target_user_id -
+        context.user_data['payout_target_user_id'] = target_user_id
+        # -context.user_data['payout_amount_uah'] = uah_amount
+        context.user_data['payout_amount_usd'] = usd_amount
+        logger.info(f"💾 /payout: Данные сохранены в context.user_data для {user_id}")
+
+        # Предлагаем выбрать метод оплаты
+        keyboard = [
+            [InlineKeyboardButton("💳 Оплата карткою", callback_data='payout_card')],
+            [InlineKeyboardButton("🪙 Криптовалюта", callback_data='payout_crypto')],
+            [InlineKeyboardButton("⬅️ Назад", callback_data='payout_cancel')],
+            [InlineKeyboardButton("❓ Запитання", callback_data='question')]
+        ]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        await update.message.reply_text(
+            f"💳 Створення платежу для користувача <@{target_user_id}> на суму {usd_amount}$.\n"
+            "Оберіть метод оплати:",
+            parse_mode='Markdown',
+            reply_markup=reply_markup
+        )
+
+    # --- Вспомогательные функции для владельцев ---
+    async def forward_question_to_owners(self, context: ContextTypes.DEFAULT_TYPE, client_id: int, client_info: User, question_text: str):
+        """Пересылает вопрос основателям"""
+        bot = context.bot
+        client_name = client_info.first_name or "Клієнт"
+        message_to_send = f"❓ **Нове запитання від {client_name} (ID: {client_id}):**\n\n{question_text}"
+
+        for owner_id in [OWNER_ID_1, OWNER_ID_2]:
+            try:
+                keyboard = [
+                    [InlineKeyboardButton("💬 Відповісти", callback_data=f'reply_to_{client_id}')],
+                    [InlineKeyboardButton("👤 Історія", callback_data=f'history_{client_id}')],
+                    [InlineKeyboardButton("📌 Призначити собі", callback_data=f'assign_{client_id}')]
+                ]
+                reply_markup = InlineKeyboardMarkup(keyboard)
+                await bot.send_message(chat_id=owner_id, text=message_to_send, parse_mode='Markdown', reply_markup=reply_markup)
+            except Exception as e:
+                logger.error(f"❌ Не удалось отправить вопрос основателю {owner_id}: {e}")
+
+    async def forward_order_to_owners(self, context: ContextTypes.DEFAULT_TYPE, client_id: int, client_info: User, order_text: str):
+        """Пересылает заказ основателям"""
+        bot = context.bot
+        client_name = client_info.first_name or "Клієнт"
+        message_to_send = f"🛍️ **Нове замовлення від {client_name} (ID: {client_id}):**\n\n{order_text}"
+
+        for owner_id in [OWNER_ID_1, OWNER_ID_2]:
+            try:
+                keyboard = [
+                    [InlineKeyboardButton("💬 Відповісти", callback_data=f'reply_to_{client_id}')],
+                    [InlineKeyboardButton("👤 Історія", callback_data=f'history_{client_id}')],
+                    [InlineKeyboardButton("📌 Призначити собі", callback_data=f'assign_{client_id}')]
+                ]
+                reply_markup = InlineKeyboardMarkup(keyboard)
+                await bot.send_message(chat_id=owner_id, text=message_to_send, parse_mode='Markdown', reply_markup=reply_markup)
+            except Exception as e:
+                logger.error(f"❌ Не удалось отправить заказ основателю {owner_id}: {e}")
+
+    async def handle_owner_message(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Обработчик сообщений от владельцев"""
+        owner_id = update.effective_user.id
+        message_text = update.message.text
+
+        # Проверяем, назначен ли этот владелец к какому-то клиенту
+        target_client_id = owner_client_map.get(owner_id)
+
+        if not target_client_id:
+            await update.message.reply_text(
+                "ℹ️ Ви не призначені до жодного клієнта. Використовуйте /chats або /dialog <user_id>."
+            )
+            return
+
+        try:
+            # Отправляем сообщение клиенту
+            await context.bot.send_message(
+                chat_id=target_client_id,
+                text=f"👤 **Менеджер:** {message_text}",
+                parse_mode='Markdown'
+            )
+            # Сохраняем сообщение от владельца
+            save_message(target_client_id, message_text, False)
+            await update.message.reply_text("✅ Повідомлення надіслано клієнту.")
+        except BadRequest as e:
+            if "Chat not found" in str(e) or "bot was blocked by the user" in str(e):
+                await update.message.reply_text("❌ Клієнт заблокував бота або чат не знайдено.")
+                # Удаляем из активных диалогов
+                if target_client_id in active_conversations:
+                    del active_conversations[target_client_id]
+                try:
+                    with get_db_connection() as conn:
+                        with conn.cursor() as cur:
+                            cur.execute("DELETE FROM active_conversations WHERE user_id = %s", (target_client_id,))
+                        conn.commit()
+                except Exception as db_e:
+                    logger.error(f"❌ Ошибка удаления диалога из БД для {target_client_id}: {db_e}")
+                # Удаляем из owner_client_map
+                if owner_id in owner_client_map:
+                    del owner_client_map[owner_id]
+            else:
+                logger.error(f"BadRequest при отправке сообщения клиенту {target_client_id}: {e}")
+                await update.message.reply_text("❌ Помилка при надсиланні повідомлення клієнту.")
+        except Exception as e:
+            logger.error(f"Ошибка при отправке сообщения клиенту {target_client_id}: {e}")
+            await update.message.reply_text("❌ Помилка при надсиланні повідомлення клієнту.")
+
+    # --- Обработчик ошибок ---
+    async def error_handler(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Обработчик ошибок"""
-        logger.error(msg="Exception while handling an update:", exc_info=context.error)
+        logger.warning(f'Update {update} caused error {context.error}')
 
-# --- Основная логика запуска ---
-bot_instance = TelegramBot()
+# --- Webhook handlers ---
+@flask_app.route('/webhook', methods=['POST'])
+async def webhook():
+    """Обработчик вебхука Telegram"""
+    if telegram_app:
+        json_string = request.get_data().decode('utf-8')
+        update = Update.de_json(json.loads(json_string), telegram_app.bot)
+        await telegram_app.process_update(update)
+        return jsonify({'status': 'ok'})
+    else:
+        return jsonify({'status': 'bot not initialized'}), 500
 
+@flask_app.route('/nowpayments-ipn', methods=['POST'])
+async def nowpayments_ipn():
+    """Обработчик IPN уведомлений от NOWPayments"""
+    data = await request.get_json()
+    logger.info(f"📥 NOWPayments IPN received: {data}")
+    # Здесь можно добавить логику обработки уведомлений
+    return jsonify({'status': 'ok'})
+
+# --- Функции запуска ---
 async def setup_webhook():
-    """Настройка webhook"""
+    """Настраивает вебхук для бота"""
     try:
         if not WEBHOOK_URL:
             logger.error("❌ WEBHOOK_URL не установлен")
             return False
-        # Удаляем существующий webhook
-        await bot_instance.application.bot.delete_webhook()
-        logger.info("🗑️ Старый webhook удален")
-        # Устанавливаем новый webhook
-        await bot_instance.application.bot.set_webhook(
-            url=f"{WEBHOOK_URL}/{BOT_TOKEN}",
-            max_connections=100,
-            allowed_updates=["message", "callback_query", "chat_member"]
+
+        await telegram_app.bot.set_webhook(
+            url=f"{WEBHOOK_URL}/webhook",
+            max_connections=40,
+            drop_pending_updates=True
         )
-        logger.info(f"🌐 Webhook установлен на {WEBHOOK_URL}/{BOT_TOKEN}")
+        logger.info(f"✅ Вебхук установлен: {WEBHOOK_URL}/webhook")
         return True
     except Exception as e:
-        logger.error(f"❌ Ошибка настройки webhook: {e}")
+        logger.error(f"❌ Ошибка установки вебхука: {e}")
         return False
 
 async def start_bot():
-    """Асинхронный запуск бота"""
-    global bot_running
+    """Инициализирует и запускает бота"""
+    global telegram_app, bot_running
     try:
-        # Инициализация БД
+        # Инициализируем БД
         init_db()
-        # Инициализация приложения
+        # Загружаем статистику
+        load_stats()
+
+        # Создаем экземпляр бота
+        bot_instance = TelegramBot(BOT_TOKEN)
         await bot_instance.initialize()
-        # Запуск в зависимости от режима
+        telegram_app = bot_instance.application
+
         if USE_POLLING:
+            await setup_webhook() # На случай, если вдруг переменная не та
             await bot_instance.start_polling()
             bot_running = True
             logger.info("✅ Бот запущен в polling режиме")
@@ -1903,9 +1721,10 @@ async def start_bot():
         raise
 
 def bot_thread():
+    """Запускает бота в отдельном потоке"""
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
-    bot_instance.loop = loop
+    bot_instance = None
     try:
         loop.run_until_complete(start_bot())
         if USE_POLLING:
@@ -1930,74 +1749,15 @@ def bot_thread():
         time.sleep(5)
         bot_thread()
 
-# --- Flask handlers ---
-@flask_app.route('/health', methods=['GET'])
-def health_check():
-    return jsonify({'status': 'ok', 'bot_running': bot_running}), 200
-
-@flask_app.route('/stats', methods=['GET'])
-def get_stats():
-    return jsonify({'stats': bot_statistics}), 200
-
-@flask_app.route(f'/{BOT_TOKEN}', methods=['POST'])
-def webhook():
-    if USE_POLLING:
-        return jsonify({'error': 'Webhook disabled in polling mode'}), 400
-    global telegram_app
-    if not telegram_app or not bot_instance.initialized:
-        logger.error("Telegram app не инициализирован")
-        return jsonify({'error': 'Bot not initialized'}), 500
-    try:
-        json_data = request.get_json()
-        if json_data:
-            update = Update.de_json(json_data, bot_instance.application.bot)
-            # asyncio.run_coroutine_threadsafe(telegram_app.process_update(update), telegram_app.loop)
-            # Используем loop.call_soon_threadsafe для лучшей совместимости
-            bot_instance.loop.call_soon_threadsafe(
-                asyncio.create_task,
-                bot_instance.application.process_update(update)
-            )
-        return jsonify({'status': 'ok'}), 200
-    except Exception as e:
-        logger.error(f"❌ Ошибка обработки webhook: {e}")
-        return jsonify({'error': str(e)}), 500
-
-# --- Конец Flask handlers ---
-
-def main():
-    # Задержка для Render.com, чтобы избежать конфликтов
-    if os.environ.get('RENDER'):
-        logger.info("⏳ Ожидаем 10 секунд для предотвращения конфликтов...")
-        time.sleep(10)
-
-    # Запускаем автосохранение в отдельном потоке
-    auto_save_thread = threading.Thread(target=auto_save_loop, daemon=True)
-    auto_save_thread.start()
-
-    # Инициализация БД
-    init_db()
-
-    # Запуск Flask сервера в отдельном потоке
-    from waitress import serve
-    flask_thread = threading.Thread(target=lambda: serve(flask_app, host='0.0.0.0', port=PORT))
-    flask_thread.daemon = True
-    flask_thread.start()
-    logger.info(f"🌐 Flask сервер запущен на порту {PORT}")
-
-    # Запускаем бота в отдельном потоке
-    bot_t = threading.Thread(target=bot_thread)
-    bot_t.daemon = True
-    bot_t.start()
-
-    # Основной цикл для проверки состояния
-    try:
-        while True:
-            time.sleep(PING_INTERVAL)
-            logger.info("✅ Бот активен")
-    except KeyboardInterrupt:
-        logger.info("🛑 Получен сигнал завершения работы")
-    except Exception as e:
-        logger.error(f"❌ Критическая ошибка в основном цикле: {e}")
+def start_flask():
+    """Запускает Flask приложение"""
+    flask_app.run(host='0.0.0.0', port=WEBHOOK_PORT)
 
 if __name__ == '__main__':
-    main()
+    # Запускаем Flask в отдельном потоке
+    flask_thread = threading.Thread(target=start_flask)
+    flask_thread.start()
+    logger.info("✅ Flask сервер запущен")
+
+    # Запускаем бота в основном потоке
+    bot_thread()
