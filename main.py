@@ -51,17 +51,22 @@ if not NOWPAYMENTS_API_KEY:
     raise ValueError("NOWPAYMENTS_API_KEY не установлен в переменных окружения")
 
 # Курсы валют
-EXCHANGE_RATE_UAH_TO_USD = 41.0 # Примерный курс, можно заменить на динамический
+EXCHANGE_RATE_UAH_TO_USD = float(os.getenv('EXCHANGE_RATE_UAH_TO_USD', 41.26)) # Примерный курс, можно заменить на динамический
 
-# Доступные криптовалюты для NOWPayments
+# Доступные криптовалюты для NOWPayments (из оплата.txt)
 AVAILABLE_CURRENCIES = {
-    "Bitcoin (BTC)": "btc",
-    "Ethereum (ETH)": "eth",
-    "Litecoin (LTC)": "ltc",
-    "BNB (BNB)": "bnb",
+    "USDT (Solana)": "usdtsol",
     "USDT (TRC20)": "usdttrc20",
-    "USDC (ERC20)": "usdcerc20"
+    "ETH": "eth",
+    "USDT (Arbitrum)": "usdtarb",
+    "USDT (Polygon)": "usdtmatic",
+    "USDT (TON)": "usdtton",
+    "AVAX (C-Chain)": "avax",
+    "APTOS (APT)": "apt"
 }
+
+# Реквизиты карты (из оплата.txt)
+CARD_DETAILS = "1234 5678 9012 3456" # Тестовые реквизиты
 
 # --- Инициализация Flask приложения ---
 flask_app = Flask(__name__)
@@ -402,7 +407,7 @@ class TelegramBot:
         # Проверяем активные диалоги
         if user_id in active_conversations:
             await update.message.reply_text(
-                "❗ У вас вже є активний діалог."
+                "❗ У вас вже ф активний діалог."
                 "Будь ласка, продовжуйте писати в поточному діалозі або завершіть його командою /stop, "
                 "якщо хочете почати новий діалог."
             )
@@ -612,7 +617,7 @@ class TelegramBot:
                 reply_markup = InlineKeyboardMarkup(keyboard)
                 await query.edit_message_text(
                     f"💳 Реквізити для оплати {usd_amount}$:\n"
-                    "`1234 5678 9012 3456`\n"
+                    f"`{CARD_DETAILS}`\n"
                     "(Тестові реквізити)\n\n"
                     "Після оплати натисніть кнопку '✅ Оплачено'.",
                     parse_mode='Markdown',
@@ -793,7 +798,7 @@ class TelegramBot:
                 reply_markup = InlineKeyboardMarkup(keyboard)
                 await query.edit_message_text(
                     f"💳 Реквізити для оплати {usd_amount}$ користувачу <@{target_user_id}>:\n"
-                    "`1234 5678 9012 3456`\n"
+                    f"`{CARD_DETAILS}`\n"
                     "(Тестові реквізити)\n\n"
                     "Після оплати натисніть кнопку '✅ Оплачено'.",
                     parse_mode='Markdown',
