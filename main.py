@@ -588,23 +588,28 @@ class TelegramBot:
 
     # --- Логика оплаты ---
     async def payment_callback_handler(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Обработчик callback кнопок, связанных с оплатой"""
-        query = update.callback_query
-        await query.answer()
-        user_id = query.from_user.id # ID того, кто нажал кнопку
-        data = query.data
-        logger.info(f"📥 Callback received: data='{data}', from user_id={user_id}")
+    """Обработчик callback кнопок, связанных с оплатой"""
+    query = update.callback_query
+    await query.answer()
+    user_id = query.from_user.id # ID того, кто нажал кнопку
+    data = query.data
+    logger.info(f"📥 Callback received: data='{data}', from user_id={user_id}")
 
-        # - Логика для /pay -
-        if data.startswith('pay_'):
-            logger.info(f"➡️ Передача callback 'pay_' в существующую логику для пользователя {user_id}")
-            # Проверяем, есть ли сумма в контексте
-            usd_amount = context.user_data.get('payment_amount_usd')
-            order_details = context.user_data.get('order_details_for_payment')
-            if not usd_amount or not order_details:
-                await query.edit_message_text("❌ Помилка: інформація про платіж втрачена. Спробуйте ще раз.")
-                logger.error(f"⚠️ Данные pay потеряны для пользователя {user_id}")
-                return
+    # - Логика для /pay (для пользователя) -
+    if data.startswith('pay_'):
+        logger.info(f"➡️ Передача callback 'pay_' в существующую логику для пользователя {user_id}")
+        # Проверяем, является ли пользователь основателем
+        if user_id in [OWNER_ID_1, OWNER_ID_2]:
+            await query.edit_message_text("❌ У вас немає прав для цієї дії.")
+            return
+
+        # Проверяем, есть ли сумма в контексте
+        usd_amount = context.user_data.get('payment_amount_usd')
+        order_details = context.user_data.get('order_details_for_payment')
+        if not usd_amount or not order_details:
+            await query.edit_message_text("❌ Помилка: інформація про платіж втрачена. Спробуйте ще раз.")
+            logger.error(f"⚠️ Данные pay потеряны для пользователя {user_id}")
+            return
 
             # - Оплата карткой -
             if data == 'pay_card':
