@@ -405,7 +405,8 @@ class TelegramBot:
             BotCommandScopeChat(chat_id=OWNER_ID_2)
         ]
         user_commands = [
-            BotCommandScopeChat(chat_id='*') # Для всех остальных
+            from telegram.constants import BotCommandScopeDefault # Убедитесь, что импортировано
+user_commands = [BotCommandScopeDefault()] # Для всех остальных
         ]
         try:
             # Команды для основателей
