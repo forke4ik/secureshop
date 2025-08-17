@@ -8,7 +8,7 @@ import json
 import re
 from datetime import datetime
 from telegram import BotCommandScopeDefault
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, User, BotCommandScopeChat
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, User, BotCommandScopeChat, BotCommandScopeDefault
 from telegram.ext import Application, CommandHandler, MessageHandler, CallbackQueryHandler, filters, ContextTypes
 from telegram.error import Conflict
 from flask import Flask, request, jsonify
