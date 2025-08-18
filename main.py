@@ -1135,7 +1135,7 @@ class TelegramBot:
                 reply_markup=InlineKeyboardMarkup(keyboard)
             ) 
         elif query.data.startswith('pay_card_'):
-            try:
+        try:
         # Виправлення: правильно отримуємо суму з callback_data
         parts = query.data.split('_')
         amount = int(parts[2]) # parts[0]='pay', parts[1]='card', parts[2]='СУМА'
