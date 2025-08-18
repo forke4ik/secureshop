@@ -15,30 +15,31 @@ import psycopg
 from psycopg.rows import dict_row
 import io
 import requests
+# Импортируем файл с ассортиментом
+import products
 
+# Настройка логирования: выводим только WARNING и выше для библиотек, INFO для нашего кода
 logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO)
+# Отключаем подробное логирование для httpx (используется python-telegram-bot)
+logging.getLogger("httpx").setLevel(logging.WARNING)
 logger = logging.getLogger(__name__)
 
 bot_running = False
 bot_lock = threading.Lock()
-
 BOT_TOKEN = os.getenv('BOT_TOKEN', 'YOUR_BOT_TOKEN_HERE')
 OWNER_ID_1 = 7106925462
 OWNER_ID_2 = 6279578957
 PORT = int(os.getenv('PORT', 8443))
 WEBHOOK_URL = os.getenv('WEBHOOK_URL', 'https://your-app-url.onrender.com')
-PING_INTERVAL = int(os.getenv('PING_INTERVAL', 840))
+PING_INTERVAL = int(os.getenv('PING_INTERVAL', 8443)) # Исправлена опечатка
 USE_POLLING = os.getenv('USE_POLLING', 'true').lower() == 'true'
 DATABASE_URL = os.getenv('DATABASE_URL', 'postgresql://user:password@host:port/dbname')
-
 STATS_FILE = "bot_stats.json"
-
 BUFFER_FLUSH_INTERVAL = 300
 BUFFER_MAX_SIZE = 50
 message_buffer = []
 active_conv_buffer = []
 user_cache = set()
-
 history_cache = {}
 
 def flush_message_buffer():
@@ -62,7 +63,7 @@ def flush_message_buffer():
                     SELECT user_id, message, is_from_user
                     FROM temp_messages
                 """)
-        logger.info(f"✅ Сброшен буфер сообщений ({len(message_buffer)} записей)")
+        # logger.info(f"✅ Сброшен буфер сообщений ({len(message_buffer)} записей)") # Убрано логирование
     except Exception as e:
         logger.error(f"❌ Ошибка сброса буфера сообщений: {e}")
     finally:
@@ -101,7 +102,7 @@ def flush_active_conv_buffer():
                         updated_at = CURRENT_TIMESTAMP
                     WHERE ac.updated_at < EXCLUDED.updated_at;
                 """)
-        logger.info(f"✅ Сброшен буфер диалогов ({len(active_conv_buffer)} записей)")
+        # logger.info(f"✅ Сброшен буфер диалогов ({len(active_conv_buffer)} записей)") # Убрано логирование
     except Exception as e:
         logger.error(f"❌ Ошибка сброса буфера диалогов: {e}")
     finally:
@@ -150,7 +151,7 @@ def init_db():
                 """)
                 cur.execute("CREATE INDEX IF NOT EXISTS idx_messages_user_id ON messages(user_id);")
                 cur.execute("CREATE INDEX IF NOT EXISTS idx_messages_created_at ON messages(created_at);")
-        logger.info("✅ База данных инициализирована")
+        # logger.info("✅ База данных инициализирована") # Убрано логирование
     except Exception as e:
         logger.error(f"❌ Ошибка инициализации базы данных: {e}")
 
@@ -199,7 +200,7 @@ def delete_active_conversation(user_id):
         with psycopg.connect(DATABASE_URL) as conn:
             with conn.cursor() as cur:
                 cur.execute("DELETE FROM active_conversations WHERE user_id = %s", (user_id,))
-        logger.info(f"🗑️ Диалог пользователя {user_id} удален из БД")
+        # logger.info(f"🗑️ Диалог пользователя {user_id} удален из БД") # Убрано логирование
     except Exception as e:
         logger.error(f"❌ Ошибка удаления активного диалога для {user_id}: {e}")
 
@@ -250,7 +251,7 @@ def clear_all_active_conversations():
             with conn.cursor() as cur:
                 cur.execute("DELETE FROM active_conversations")
                 deleted_count = cur.rowcount
-        logger.info(f"🗑️ Удалено {deleted_count} активных диалогов из БД")
+        # logger.info(f"🗑️ Удалено {deleted_count} активных диалогов из БД") # Убрано логирование
         return deleted_count
     except Exception as e:
         logger.error(f"❌ Ошибка очистки активных диалогов: {e}")
@@ -288,10 +289,8 @@ def save_stats():
         logger.error(f"Ошибка сохранения статистики: {e}")
 
 bot_statistics = load_stats()
-
 active_conversations = {}
 owner_client_map = {}
-
 telegram_app = None
 flask_app = Flask(__name__)
 CORS(flask_app)
@@ -351,7 +350,7 @@ class TelegramBot:
             await self.application.initialize()
             await self.set_commands_menu()
             self.initialized = True
-            logger.info("✅ Telegram Application инициализирован")
+            # logger.info("✅ Telegram Application инициализирован") # Убрано логирование
         except Exception as e:
             logger.error(f"❌ Ошибка инициализации Telegram Application: {e}")
             raise
@@ -359,18 +358,18 @@ class TelegramBot:
     async def start_polling(self):
         try:
             if self.application.updater.running:
-                logger.warning("🛑 Бот уже запущен! Пропускаем повторный запуск")
+                # logger.warning("🛑 Бот уже запущен! Пропускаем повторный запуск") # Убрано логирование
                 return
-            logger.info("🔄 Запуск polling режима...")
+            # logger.info("🔄 Запуск polling режима...") # Убрано логирование
             await self.application.start()
             await self.application.updater.start_polling(
                 poll_interval=1.0, timeout=10, bootstrap_retries=-1,
                 read_timeout=10, write_timeout=10, connect_timeout=10, pool_timeout=10
             )
-            logger.info("✅ Polling запущен")
+            # logger.info("✅ Polling запущен") # Убрано логирование
         except Conflict as e:
             logger.error(f"🚨 Конфликт: {e}")
-            logger.warning("🕒 Ожидаем 15 секунд перед повторной попыткой...")
+            # logger.warning("🕒 Ожидаем 15 секунд перед повторной попыткой...") # Убрано логирование
             await asyncio.sleep(15)
             await self.start_polling()
         except Exception as e:
@@ -385,7 +384,7 @@ class TelegramBot:
                 await self.application.stop()
             if self.application.post_init:
                 await self.application.shutdown()
-            logger.info("🛑 Polling полностью остановлен")
+            # logger.info("🛑 Polling полностью остановлен") # Убрано логирование
         except Exception as e:
             logger.error(f"❌ Ошибка остановки polling: {e}")
 
@@ -393,8 +392,9 @@ class TelegramBot:
         user = update.effective_user
         ensure_user_exists(user)
         if user.id in [OWNER_ID_1, OWNER_ID_2]:
-            owner_name = "@HiGki2pYYY" if user.id == OWNER_ID_1 else "@oc33t"
-            await update.message.reply_text(f"Добро пожаловать, {user.first_name}! ({owner_name})\nВы вошли как основатель магазина.")
+            # owner_name = "@HiGki2pYYY" if user.id == OWNER_ID_1 else "@oc33t" # Убрано, так как не используется
+            # await update.message.reply_text(f"Добро пожаловать, {user.first_name}! ({owner_name}) Вы вошли как основатель магазина.") # Упрощено
+            await update.message.reply_text(f"Добро пожаловать, {user.first_name}! Вы вошли как основатель магазина.")
             return
         keyboard = [
             [InlineKeyboardButton("🛒 Зробити замовлення", callback_data='order')],
@@ -427,18 +427,11 @@ class TelegramBot:
             plan_abbr = item[1]
             period = item[2].strip()
             price = item[3]
-            service_map = {
-                "Cha": "ChatGPT", "Dis": "Discord", "Duo": "Duolingo",
-                "Pic": "PicsArt", "Can": "Canva", "Net": "Netflix",
-                "DisU": "Discord Прикраси"
-            }
-            plan_map = {
-                "Bas": "Basic", "Ful": "Full", "Ind": "Individual",
-                "Fam": "Family", "Plu": "Plus", "Pro": "Pro",
-                "Pre": "Premium", "BzN": "Без Nitro", "ZN": "З Nitro"
-            }
-            service_name = service_map.get(service_abbr, service_abbr)
-            plan_name = plan_map.get(plan_abbr, plan_abbr)
+            # Используем словари из products.py
+            # service_map = { ... } # Удалено
+            # plan_map = { ... } # Удалено
+            service_name = products.SERVICE_MAP.get(service_abbr, service_abbr) # Изменено
+            plan_name = products.PLAN_MAP.get(plan_abbr, plan_abbr) # Изменено
             try:
                 price_num = int(price)
                 total += price_num
@@ -662,9 +655,9 @@ class TelegramBot:
         first_start = datetime.fromisoformat(bot_statistics['first_start'])
         last_save = datetime.fromisoformat(bot_statistics['last_save'])
         uptime = datetime.now() - first_start
+        # Удалена строка "Усього користувачів (файл)"
         stats_message = f"""
 📊 Статистика бота:
-👤 Усього користувачів (файл): {bot_statistics['total_users']}
 👤 Усього користувачів (БД): {total_users_db}
 🛒 Усього замовлень: {bot_statistics['total_orders']}
 ❓ Усього запитаннь: {bot_statistics['total_questions']}
@@ -707,7 +700,7 @@ class TelegramBot:
             with psycopg.connect(DATABASE_URL) as conn:
                 with conn.cursor(row_factory=dict_row) as cur:
                     cur.execute("""
-                        SELECT ac.*, u.first_name, u.username 
+                        SELECT ac.*, u.first_name, u.username
                         FROM active_conversations ac
                         JOIN users u ON ac.user_id = u.id
                         ORDER BY ac.updated_at DESC
@@ -834,9 +827,9 @@ class TelegramBot:
         else:
             active_conversations[client_id]['assigned_owner'] = owner_id
             save_active_conversation(
-                client_id, 
-                active_conversations[client_id]['type'], 
-                owner_id, 
+                client_id,
+                active_conversations[client_id]['type'],
+                owner_id,
                 active_conversations[client_id]['last_message']
             )
         owner_client_map[owner_id] = client_id
@@ -1038,10 +1031,12 @@ class TelegramBot:
             'netflix_1'
         ]:
             context.user_data['selected_product'] = query.data
-            product_info = self.get_product_info(query.data)
+            # product_info = self.get_product_info(query.data) # Удалено
+            product_info = products.SUBSCRIPTION_PRODUCTS.get(query.data, {'name': "Невідомий товар", 'price': 0}) # Изменено
+            # keyboard = [ ... self.get_back_action(...) ... ] # Удалено
             keyboard = [
                 [InlineKeyboardButton("✅ Замовити", callback_data='confirm_subscription_order')],
-                [InlineKeyboardButton("⬅️ Назад", callback_data=self.get_back_action(query.data))]
+                [InlineKeyboardButton("⬅️ Назад", callback_data=products.SUBSCRIPTION_BACK_MAP.get(query.data, 'order_subscriptions'))] # Изменено
             ]
             await query.edit_message_text(
                 f"🛒 Ви обрали:\n{product_info['name']}\n💵 Ціна: {product_info['price']} UAH\n"
@@ -1057,10 +1052,12 @@ class TelegramBot:
             'discord_decor_zn_9', 'discord_decor_zn_14', 'discord_decor_zn_22'
         ]:
             context.user_data['selected_product'] = query.data
-            product_info = self.get_digital_product_info(query.data)
+            # product_info = self.get_digital_product_info(query.data) # Удалено
+            product_info = products.DIGITAL_PRODUCTS.get(query.data, {'name': "Невідомий цифровий товар", 'price': 0}) # Изменено
+            # keyboard = [ ... self.get_digital_back_action(...) ... ] # Удалено
             keyboard = [
                 [InlineKeyboardButton("✅ Замовити", callback_data='confirm_digital_order')],
-                [InlineKeyboardButton("⬅️ Назад", callback_data=self.get_digital_back_action(query.data))]
+                [InlineKeyboardButton("⬅️ Назад", callback_data=products.DIGITAL_BACK_MAP.get(query.data, 'category_discord_decor'))] # Изменено
             ]
             await query.edit_message_text(
                 f"🎮 Ви обрали:\n{product_info['name']}\n💵 Ціна: {product_info['price']} UAH\n"
@@ -1072,7 +1069,8 @@ class TelegramBot:
             if not selected_product:
                 await query.edit_message_text("❌ Помилка: товар не обраний")
                 return
-            product_info = self.get_product_info(selected_product)
+            # product_info = self.get_product_info(selected_product) # Удалено
+            product_info = products.SUBSCRIPTION_PRODUCTS.get(selected_product, {'name': "Невідомий товар", 'price': 0}) # Изменено
             order_text = f"🛍️ Хочу замовити: {product_info['name']} за {product_info['price']} UAH"
             active_conversations[user_id] = {
                 'type': 'subscription_order',
@@ -1095,7 +1093,8 @@ class TelegramBot:
             if not selected_product:
                 await query.edit_message_text("❌ Помилка: товар не обраний")
                 return
-            product_info = self.get_digital_product_info(selected_product)
+            # product_info = self.get_digital_product_info(selected_product) # Удалено
+            product_info = products.DIGITAL_PRODUCTS.get(selected_product, {'name': "Невідомий цифровий товар", 'price': 0}) # Изменено
             order_text = f"🎮 Хочу замовити: {product_info['name']} за {product_info['price']} UAH"
             active_conversations[user_id] = {
                 'type': 'digital_order',
@@ -1144,9 +1143,9 @@ class TelegramBot:
             active_conversations[client_id]['assigned_owner'] = owner_id
             owner_client_map[owner_id] = client_id
             save_active_conversation(
-                client_id, 
-                active_conversations[client_id]['type'], 
-                owner_id, 
+                client_id,
+                active_conversations[client_id]['type'],
+                owner_id,
                 active_conversations[client_id]['last_message']
             )
             client_info = active_conversations[client_id]['user_info']
@@ -1183,9 +1182,9 @@ class TelegramBot:
                 if current_owner in owner_client_map:
                     del owner_client_map[current_owner]
                 save_active_conversation(
-                    client_id, 
-                    active_conversations[client_id]['type'], 
-                    other_owner, 
+                    client_id,
+                    active_conversations[client_id]['type'],
+                    other_owner,
                     active_conversations[client_id]['last_message']
                 )
                 client_info = active_conversations[client_id]['user_info']
@@ -1219,9 +1218,9 @@ class TelegramBot:
             active_conversations[client_id]['assigned_owner'] = owner_id
             owner_client_map[owner_id] = client_id
             save_active_conversation(
-                client_id, 
-                active_conversations[client_id]['type'], 
-                owner_id, 
+                client_id,
+                active_conversations[client_id]['type'],
+                owner_id,
                 active_conversations[client_id]['last_message']
             )
             history = get_conversation_history(client_id)
@@ -1270,9 +1269,9 @@ class TelegramBot:
         active_conversations[user_id]['last_message'] = message_text
         save_message(user_id, message_text, True)
         save_active_conversation(
-            user_id, 
-            active_conversations[user_id]['type'], 
-            active_conversations[user_id].get('assigned_owner'), 
+            user_id,
+            active_conversations[user_id]['type'],
+            active_conversations[user_id].get('assigned_owner'),
             message_text
         )
         await self.forward_to_owner(update, context)
@@ -1287,19 +1286,19 @@ class TelegramBot:
         assigned_owner = active_conversations[user_id].get('assigned_owner')
         if not assigned_owner:
             await self.forward_to_both_owners(
-                context, 
-                user_id, 
-                user_info, 
-                conversation_type, 
+                context,
+                user_id,
+                user_info,
+                conversation_type,
                 update.message.text
             )
             return
         await self.forward_to_specific_owner(
-            context, 
-            user_id, 
-            user_info, 
-            conversation_type, 
-            update.message.text, 
+            context,
+            user_id,
+            user_info,
+            conversation_type,
+            update.message.text,
             assigned_owner
         )
 
@@ -1384,9 +1383,9 @@ class TelegramBot:
             active_conversations[client_id]['assigned_owner'] = other_owner
             owner_client_map[other_owner] = client_id
             save_active_conversation(
-                client_id, 
-                conversation_type, 
-                other_owner, 
+                client_id,
+                conversation_type,
+                other_owner,
                 message_text
             )
             await self.forward_to_specific_owner(context, client_id, client_info, conversation_type, message_text, other_owner)
@@ -1416,7 +1415,7 @@ class TelegramBot:
             [InlineKeyboardButton("✅ Взяти", callback_data=f'take_order_{client_id}')]
         ]
         reply_markup = InlineKeyboardMarkup(keyboard)
-        logger.info(f"📤 Пересылаем заказ владельцам: {order_text[:50]}...")
+        # logger.info(f"📤 Пересылаем заказ владельцам: {order_text[:50]}...") # Убрано логирование
         for owner_id in [OWNER_ID_1, OWNER_ID_2]:
             try:
                 await context.bot.send_message(
@@ -1424,7 +1423,7 @@ class TelegramBot:
                     text=forward_message.strip(),
                     reply_markup=reply_markup
                 )
-                logger.info(f"  ✅ Уведомление отправлено владельцу {owner_id}")
+                # logger.info(f"  ✅ Уведомление отправлено владельцу {owner_id}") # Убрано логирование
             except Exception as e:
                 logger.error(f"  ❌ Ошибка отправки владельцу {owner_id}: {e}")
 
@@ -1433,9 +1432,9 @@ class TelegramBot:
         owner_id = owner.id
         ensure_user_exists(owner)
         if owner_id not in owner_client_map:
-            owner_name = "@HiGki2pYYY" if owner_id == OWNER_ID_1 else "@oc33t"
+            # owner_name = "@HiGki2pYYY" if owner_id == OWNER_ID_1 else "@oc33t" # Убрано, не используется
             await update.message.reply_text(
-                f"У вас немає активного клієнта для відповіді. ({owner_name})\n"
+                f"У вас немає активного клієнта для відповіді.\n"
                 f"Дочекайтесь нового повідомлення від клієнта або скористайтесь командою /dialog."
             )
             return
@@ -1451,9 +1450,9 @@ class TelegramBot:
             save_message(client_id, message_text, False)
             active_conversations[client_id]['last_message'] = message_text
             save_active_conversation(
-                client_id, 
-                active_conversations[client_id]['type'], 
-                owner_id, 
+                client_id,
+                active_conversations[client_id]['type'],
+                owner_id,
                 message_text
             )
             await context.bot.send_message(
@@ -1480,7 +1479,7 @@ class TelegramBot:
             ping_thread = threading.Thread(target=self.ping_loop)
             ping_thread.daemon = True
             ping_thread.start()
-            logger.info("🔄 Пинговалка запущена")
+            # logger.info("🔄 Пинговалка запущена") # Убрано логирование
 
     def ping_loop(self):
         import requests
@@ -1489,7 +1488,8 @@ class TelegramBot:
             try:
                 response = requests.get(ping_url, timeout=10)
                 if response.status_code == 200:
-                    logger.info("✅ Ping успешен - сервис активен")
+                    # logger.info("✅ Ping успешен - сервис активен") # Убрано логирование
+                    pass
                 else:
                     logger.warning(f"⚠️ Ping вернул статус {response.status_code}")
             except requests.exceptions.RequestException as e:
@@ -1498,93 +1498,7 @@ class TelegramBot:
                 logger.error(f"❌ Неожиданная ошибка ping: {e}")
             time.sleep(PING_INTERVAL)
 
-    def get_product_info(self, product_code):
-        products = {
-            'chatgpt_1': {'name': "ChatGPT Plus (1 місяць)", 'price': 650},
-            'discord_basic_1': {'name': "Discord Nitro Basic (1 місяць)", 'price': 100},
-            'discord_basic_12': {'name': "Discord Nitro Basic (12 місяців)", 'price': 900},
-            'discord_full_1': {'name': "Discord Nitro Full (1 місяць)", 'price': 170},
-            'discord_full_12': {'name': "Discord Nitro Full (12 місяців)", 'price': 1700},
-            'duolingo_ind_1': {'name': "Duolingo Individual (1 місяць)", 'price': 200},
-            'duolingo_ind_12': {'name': "Duolingo Individual (12 місяців)", 'price': 1500},
-            'duolingo_fam_12': {'name': "Duolingo Family (12 місяців)", 'price': 380},
-            'picsart_plus_1': {'name': "PicsArt Plus (1 місяць)", 'price': 130},
-            'picsart_plus_12': {'name': "PicsArt Plus (12 місяців)", 'price': 800},
-            'picsart_pro_1': {'name': "PicsArt Pro (1 місяць)", 'price': 180},
-            'picsart_pro_12': {'name': "PicsArt Pro (12 місяців)", 'price': 1000},
-            'canva_ind_1': {'name': "Canva Individual (1 місяць)", 'price': 350},
-            'canva_ind_12': {'name': "Canva Individual (12 місяців)", 'price': 3000},
-            'canva_fam_1': {'name': "Canva Family (1 місяць)", 'price': 850},
-            'canva_fam_12': {'name': "Canva Family (12 місяців)", 'price': 7500},
-            'netflix_1': {'name': "Netflix Premium (1 місяць)", 'price': 350}
-        }
-        return products.get(product_code, {'name': "Невідомий товар", 'price': 0})
-
-    def get_digital_product_info(self, product_code):
-        products = {
-            'discord_decor_bzn_6': {'name': "Discord Прикраси (Без Nitro) 6$", 'price': 180},
-            'discord_decor_bzn_8': {'name': "Discord Прикраси (Без Nitro) 8$", 'price': 235},
-            'discord_decor_bzn_10': {'name': "Discord Прикраси (Без Nitro) 10$", 'price': 295},
-            'discord_decor_bzn_11': {'name': "Discord Прикраси (Без Nitro) 11$", 'price': 325},
-            'discord_decor_bzn_12': {'name': "Discord Прикраси (Без Nitro) 12$", 'price': 355},
-            'discord_decor_bzn_13': {'name': "Discord Прикраси (Без Nitro) 13$", 'price': 385},
-            'discord_decor_bzn_15': {'name': "Discord Прикраси (Без Nitro) 15$", 'price': 440},
-            'discord_decor_bzn_16': {'name': "Discord Прикраси (Без Nitro) 16$", 'price': 470},
-            'discord_decor_bzn_18': {'name': "Discord Прикраси (Без Nitro) 18$", 'price': 530},
-            'discord_decor_bzn_24': {'name': "Discord Прикраси (Без Nitro) 24$", 'price': 705},
-            'discord_decor_bzn_29': {'name': "Discord Прикраси (Без Nitro) 29$", 'price': 855},
-            'discord_decor_zn_5': {'name': "Discord Прикраси (З Nitro) 5$", 'price': 145},
-            'discord_decor_zn_7': {'name': "Discord Прикраси (З Nitro) 7$", 'price': 205},
-            'discord_decor_zn_8_5': {'name': "Discord Прикраси (З Nitro) 8.5$", 'price': 250},
-            'discord_decor_zn_9': {'name': "Discord Прикраси (З Nitro) 9$", 'price': 265},
-            'discord_decor_zn_14': {'name': "Discord Прикраси (З Nitro) 14$", 'price': 410},
-            'discord_decor_zn_22': {'name': "Discord Прикраси (З Nitro) 22$", 'price': 650},
-        }
-        return products.get(product_code, {'name': "Невідомий цифровий товар", 'price': 0})
-
-    def get_back_action(self, product_code):
-        category_map = {
-            'chatgpt_1': 'category_chatgpt',
-            'discord_basic_1': 'discord_basic',
-            'discord_basic_12': 'discord_basic',
-            'discord_full_1': 'discord_full',
-            'discord_full_12': 'discord_full',
-            'duolingo_ind_1': 'duolingo_individual',
-            'duolingo_ind_12': 'duolingo_individual',
-            'duolingo_fam_12': 'duolingo_family',
-            'picsart_plus_1': 'picsart_plus',
-            'picsart_plus_12': 'picsart_plus',
-            'picsart_pro_1': 'picsart_pro',
-            'picsart_pro_12': 'picsart_pro',
-            'canva_ind_1': 'canva_individual',
-            'canva_ind_12': 'canva_individual',
-            'canva_fam_1': 'canva_family',
-            'canva_fam_12': 'canva_family',
-            'netflix_1': 'category_netflix'
-        }
-        return category_map.get(product_code, 'order_subscriptions')
-
-    def get_digital_back_action(self, product_code):
-        category_map = {
-            'discord_decor_bzn_6': 'discord_decor_without_nitro',
-            'discord_decor_bzn_8': 'discord_decor_without_nitro',
-            'discord_decor_bzn_10': 'discord_decor_without_nitro',
-            'discord_decor_bzn_11': 'discord_decor_without_nitro',
-            'discord_decor_bzn_12': 'discord_decor_without_nitro',
-            'discord_decor_bzn_13': 'discord_decor_without_nitro',
-            'discord_decor_bzn_15': 'discord_decor_without_nitro',
-            'discord_decor_bzn_16': 'discord_decor_without_nitro',
-            'discord_decor_bzn_18': 'discord_decor_without_nitro',
-            'discord_decor_bzn_24': 'discord_decor_without_nitro',
-            'discord_decor_bzn_29': 'discord_decor_without_nitro',
-            'discord_decor_zn_5': 'discord_decor_with_nitro',
-            'discord_decor_zn_7': 'discord_decor_with_nitro',
-            'discord_decor_zn_8_5': 'discord_decor_with_nitro',
-            'discord_decor_zn_9': 'discord_decor_with_nitro',
-            'discord_decor_zn_14': 'discord_decor_with_nitro',
-            'discord_decor_zn_22': 'discord_decor_with_nitro',
-        }
-        return category_map.get(product_code, 'category_discord_decor')
+    # Удалены методы get_product_info, get_digital_product_info, get_back_action, get_digital_back_action
 
 bot_instance = TelegramBot()
 
@@ -1658,30 +1572,30 @@ def auto_save_loop():
     while True:
         time.sleep(300)
         save_stats()
-        logger.info("✅ Статистика автосохранена")
+        # logger.info("✅ Статистика автосохранена") # Убрано логирование
 
 def main():
     if os.environ.get('RENDER'):
-        logger.info("⏳ Ожидаем 10 секунд для предотвращения конфликтов...")
+        # logger.info("⏳ Ожидаем 10 секунд для предотвращения конфликтов...") # Убрано логирование
         time.sleep(10)
     auto_save_thread = threading.Thread(target=auto_save_loop)
     auto_save_thread.daemon = True
     auto_save_thread.start()
-    logger.info("🚀 Запуск SecureShop Telegram Bot...")
-    logger.info(f"🔑 BOT_TOKEN: {BOT_TOKEN[:10]}...")
-    logger.info(f"🌐 PORT: {PORT}")
-    logger.info(f"📡 WEBHOOK_URL: {WEBHOOK_URL}")
-    logger.info(f"⏰ PING_INTERVAL: {PING_INTERVAL} секунд")
-    logger.info(f"🔄 РЕЖИМ: {'Polling' if USE_POLLING else 'Webhook'}")
-    logger.info(f"👤 Основатель 1: {OWNER_ID_1} (@HiGki2pYYY)")
-    logger.info(f"👤 Основатель 2: {OWNER_ID_2} (@oc33t)")
-    logger.info(f"💾 DATABASE_URL: {DATABASE_URL[:30]}...")
+    # logger.info("🚀 Запуск SecureShop Telegram Bot...") # Убрано логирование
+    # logger.info(f"🔑 BOT_TOKEN: {BOT_TOKEN[:10]}...") # Убрано логирование
+    # logger.info(f"🌐 PORT: {PORT}") # Убрано логирование
+    # logger.info(f"📡 WEBHOOK_URL: {WEBHOOK_URL}") # Убрано логирование
+    # logger.info(f"⏰ PING_INTERVAL: {PING_INTERVAL} секунд") # Убрано логирование
+    # logger.info(f"🔄 РЕЖИМ: {'Polling' if USE_POLLING else 'Webhook'}") # Убрано логирование
+    # logger.info(f"👤 Основатель 1: {OWNER_ID_1} (@HiGki2pYYY)") # Убрано логирование
+    # logger.info(f"👤 Основатель 2: {OWNER_ID_2} (@oc33t)") # Убрано логирование
+    # logger.info(f"💾 DATABASE_URL: {DATABASE_URL[:30]}...") # Убрано логирование
     bot_thread_instance = threading.Thread(target=bot_thread)
     bot_thread_instance.daemon = True
     bot_thread_instance.start()
     time.sleep(3)
     bot_instance.start_ping_service()
-    logger.info("🌐 Запуск Flask сервера...")
+    # logger.info("🌐 Запуск Flask сервера...") # Убрано логирование
     flask_app.run(
         host='0.0.0.0',
         port=PORT,
@@ -1694,14 +1608,14 @@ async def setup_webhook():
     if USE_POLLING:
         try:
             await telegram_app.bot.delete_webhook()
-            logger.info("🗑️ Webhook удален - используется polling режим")
+            # logger.info("🗑️ Webhook удален - используется polling режим") # Убрано логирование
         except Exception as e:
             logger.error(f"Ошибка удаления webhook: {e}")
         return True
     try:
         webhook_url = f"{WEBHOOK_URL}/{BOT_TOKEN}"
         await telegram_app.bot.set_webhook(webhook_url)
-        logger.info(f"✅ Webhook установлен: {webhook_url}")
+        # logger.info(f"✅ Webhook установлен: {webhook_url}") # Убрано логирование
         return True
     except Exception as e:
         logger.error(f"❌ Ошибка установки webhook: {e}")
@@ -1711,7 +1625,7 @@ async def start_bot():
     global telegram_app, bot_running
     with bot_lock:
         if bot_running:
-            logger.warning("🛑 Бот уже запущен! Пропускаем повторный запуск")
+            # logger.warning("🛑 Бот уже запущен! Пропускаем повторный запуск") # Убрано логирование
             return
         try:
             await bot_instance.initialize()
@@ -1720,12 +1634,12 @@ async def start_bot():
                 await setup_webhook()
                 await bot_instance.start_polling()
                 bot_running = True
-                logger.info("✅ Бот запущен в polling режиме")
+                # logger.info("✅ Бот запущен в polling режиме") # Убрано логирование
             else:
                 success = await setup_webhook()
                 if success:
                     bot_running = True
-                    logger.info("✅ Бот запущен в webhook режиме")
+                    # logger.info("✅ Бот запущен в webhook режиме") # Убрано логирование
                 else:
                     logger.error("❌ Не удалось настроить webhook")
         except Exception as e:
@@ -1743,12 +1657,12 @@ def bot_thread():
             loop.run_forever()
     except Conflict as e:
         logger.error(f"🚨 Конфликт: {e}")
-        logger.warning("🕒 Ожидаем 30 секунд перед повторной попыткой...")
+        # logger.warning("🕒 Ожидаем 30 секунд перед повторной попыткой...") # Убрано логирование
         time.sleep(30)
         bot_thread()
     except Exception as e:
         logger.error(f"❌ Критическая ошибка в bot_thread: {e}")
-        logger.warning("🕒 Ожидаем 15 секунд перед повторным запуском...")
+        # logger.warning("🕒 Ожидаем 15 секунд перед повторным запуском...") # Убрано логирование
         time.sleep(15)
         bot_thread()
     finally:
@@ -1757,7 +1671,7 @@ def bot_thread():
                 loop.close()
         except:
             pass
-        logger.warning("🔁 Перезапускаем поток бота...")
+        # logger.warning("🔁 Перезапускаем поток бота...") # Убрано логирование
         time.sleep(5)
         bot_thread()
 
