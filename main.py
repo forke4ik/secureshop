@@ -1133,9 +1133,8 @@ class TelegramBot:
             await query.edit_message_text(
                 f"{order_text}\n\nВыберите способ оплаты:",
                 reply_markup=InlineKeyboardMarkup(keyboard)
-            )
-            
-elif query.data.startswith('pay_card_'):
+            ) 
+        elif query.data.startswith('pay_card_'):
     try:
         # Виправлення: правильно отримуємо суму з callback_data
         parts = query.data.split('_')
