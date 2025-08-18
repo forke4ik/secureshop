@@ -470,7 +470,7 @@ class TelegramBot:
             logger.error(f"Помилка парсингу JSON: {e}")
             await update.message.reply_text("❌ Файл має неправильний формат JSON.")
             return
-        if 'items' not in order_data or 'total' not in order_data:
+        if 'items' not in order_data or 'total' not in order_
             await update.message.reply_text("❌ У файлі відсутні обов'язкові поля (items, total).")
             return
         order_text = "🛍️ Замовлення з сайту (з файлу):\n"
@@ -1137,22 +1137,13 @@ class TelegramBot:
                 if not pending_payment:
                     await query.edit_message_text("❌ Ошибка: информация о заказе отсутствует.")
                     return
-
-                # Передаем order_id или другой идентификатор из pending_payment
-                order_id_for_api = pending_payment.get('order_id', 'unknown')
-                if 'product_id' in pending_payment:
-                    order_id_for_api = pending_payment['product_id']
-                # Или используем временную метку
-                # order_id_for_api = str(int(time.time()))
-
-                # Создаем инвойс, передавая order_id_suffix
-                invoice_data = self.create_invoice(
-                    amount=amount, 
-                    pay_currency=pay_currency_code, 
-                    currency="uah",
-                    order_id_suffix=order_id_for_api # Передаем суффикс order_id
-                )
-                if "error" in invoice_data:
+                order_id_suffix = "unknown"
+                if 'order_id' in pending_payment:
+                    order_id_suffix = pending_payment['order_id']
+                elif 'product_id' in pending_payment:
+                    order_id_suffix = pending_payment['product_id']
+                invoice_data = self.create_invoice(amount=amount, pay_currency=pay_currency_code, currency="uah", order_id_suffix=order_id_suffix)
+                if "error" in invoice_
                     await query.edit_message_text(f"❌ Ошибка создания платежа: {invoice_data['error']}")
                     return
                 pay_url = invoice_data.get("invoice_url")
@@ -1637,22 +1628,19 @@ class TelegramBot:
             time.sleep(PING_INTERVAL)
 
     def create_invoice(self, amount, pay_currency="usdtsol", currency="uah", order_id_suffix="unknown"):
-        """Создает инвойс через NowPayments API."""
-        # Получаем API ключ из products.py (который берет из os.getenv)
         api_key = products.NOWPAYMENTS_API_KEY 
         if not api_key or api_key in ['YOUR_NOWPAYMENTS_API_KEY_HERE', '']:
             logger.error("NOWPAYMENTS_API_KEY не установлен!")
             return {"error": "API ключ не настроен"}
         url = "https://api.nowpayments.io/v1/invoice"
         headers = {"x-api-key": api_key}
-        # Генерируем order_id без использования context
         order_id = f"order_{int(time.time())}_{order_id_suffix}"
         payload = {
             "price_amount": amount,
             "price_currency": currency,
             "pay_currency": pay_currency,
             "order_id": order_id,
-            "order_description": f"Оплата заказа {order_id}" # Улучшенное описание
+            "order_description": f"Оплата заказа {order_id}"
         }
         try:
             response = requests.post(url, headers=headers, json=payload, timeout=10)
@@ -1664,8 +1652,6 @@ class TelegramBot:
         except Exception as e:
             logger.error(f"Неожиданная ошибка при создании инвойса: {e}")
             return {"error": f"Внутренняя ошибка: {e}"}
-
-    async def button_handler(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 bot_instance = TelegramBot()
 
@@ -1713,7 +1699,7 @@ def webhook():
         return jsonify({'error': 'Bot not initialized'}), 500
     try:
         json_data = request.get_json()
-        if json_data:
+        if json_
             update = Update.de_json(json_data, telegram_app.bot)
             pass
         return '', 200
