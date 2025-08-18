@@ -1622,20 +1622,23 @@ class TelegramBot:
                 logger.error(f"❌ Неожиданная ошибка ping: {e}")
             time.sleep(PING_INTERVAL)
 
-    def create_invoice(self, amount, pay_currency="usdtsol", currency="uah"):
+    def create_invoice(self, amount, pay_currency="usdtsol", currency="uah", order_id_suffix="unknown"):
+        """Создает инвойс через NowPayments API."""
+        # Получаем API ключ из products.py (который берет из os.getenv)
         api_key = products.NOWPAYMENTS_API_KEY 
         if not api_key or api_key in ['YOUR_NOWPAYMENTS_API_KEY_HERE', '']:
             logger.error("NOWPAYMENTS_API_KEY не установлен!")
             return {"error": "API ключ не настроен"}
         url = "https://api.nowpayments.io/v1/invoice"
         headers = {"x-api-key": api_key}
-        order_id = f"order_{int(time.time())}_{context.user_data.get('pending_payment', {}).get('order_id', 'unknown')}"
+        # Генерируем order_id без использования context
+        order_id = f"order_{int(time.time())}_{order_id_suffix}"
         payload = {
             "price_amount": amount,
             "price_currency": currency,
             "pay_currency": pay_currency,
             "order_id": order_id,
-            "order_description": f"Оплата заказа {order_id}"
+            "order_description": f"Оплата заказа {order_id}" # Улучшенное описание
         }
         try:
             response = requests.post(url, headers=headers, json=payload, timeout=10)
@@ -1647,6 +1650,8 @@ class TelegramBot:
         except Exception as e:
             logger.error(f"Неожиданная ошибка при создании инвойса: {e}")
             return {"error": f"Внутренняя ошибка: {e}"}
+
+    async def button_handler(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 bot_instance = TelegramBot()
 
