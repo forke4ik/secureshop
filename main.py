@@ -1134,99 +1134,131 @@ class TelegramBot:
                 f"{order_text}\n\nВыберите способ оплаты:",
                 reply_markup=InlineKeyboardMarkup(keyboard)
             )
-        elif query.data.startswith('pay_card_'):
-            try:
-                amount = int(query.data.split('_')[1])
-                # Получаем данные о заказе
-                pending_payment = context.user_data.get('pending_payment')
-                if not pending_payment:
-                    await query.edit_message_text("❌ Ошибка: информация о заказе отсутствует.")
-                    return
-                # Отображаем номер карты
-                await query.edit_message_text(
-                    f"💳 Оплата по карте:\n`{CARD_NUMBER}`",
-                    parse_mode='Markdown'
-                )
-                # Уведомляем владельцев о создании заказа (если это не из /pay)
-                if 'order_id' not in pending_payment: # Это заказ из бота
-                    product_id = pending_payment.get('product_id')
-                    product_name = pending_payment.get('product_name')
-                    order_text = f"🛍️ Хочу замовити: {product_name} за {pending_payment['price_uah']} UAH ({pending_payment['price_usd']}$)"
-                    active_conversations[user_id] = {
-                        'type': pending_payment['type'] + '_order',
-                        'user_info': user,
-                        'assigned_owner': None,
-                        'order_details': order_text,
-                        'last_message': order_text
-                    }
-                    save_active_conversation(user_id, pending_payment['type'] + '_order', None, order_text)
-                    bot_statistics['total_orders'] += 1
-                    save_stats()
-                    await self.forward_order_to_owners(context, user_id, user, order_text)
-            except Exception as e:
-                logger.error(f"Ошибка обработки оплаты по карте: {e}")
-                await query.edit_message_text("❌ Произошла ошибка при обработке оплаты.")
-        elif query.data.startswith('pay_crypto_'):
-            try:
-                amount = int(query.data.split('_')[1])
-                # Получаем данные о заказе
-                pending_payment = context.user_data.get('pending_payment')
-                if not pending_payment:
-                    await query.edit_message_text("❌ Ошибка: информация о заказе отсутствует.")
-                    return
-                # Создаем кнопки для выбора криптовалюты
-                keyboard = [
-                    [InlineKeyboardButton(name, callback_data=f'pay_crypto_invoice_{amount}_{code}')]
-                    for name, code in AVAILABLE_CURRENCIES.items()
-                ]
-                reply_markup = InlineKeyboardMarkup(keyboard)
-                await query.edit_message_text(
-                    f"Выберите криптовалюту для оплаты {amount} UAH:",
-                    reply_markup=reply_markup
-                )
-            except Exception as e:
-                logger.error(f"Ошибка обработки выбора криптовалюты: {e}")
-                await query.edit_message_text("❌ Произошла ошибка при обработке запроса.")
-        elif query.data.startswith('pay_crypto_invoice_'):
-            try:
-                parts = query.data.split('_')
-                amount = int(parts[2]) # Исправлено: правильный индекс
-                pay_currency = parts[3] # Исправлено: правильный индекс
-                # Создаем инвойс через NowPayments
-                invoice_data = self.create_invoice(context, amount=amount, pay_currency=pay_currency, currency="uah")
-                if "error" in invoice_data:
-                    await query.edit_message_text(f"❌ Ошибка создания платежа: {invoice_data['error']}")
-                    return
-                pay_url = invoice_data.get("invoice_url")
-                if pay_url:
-                    # Отправляем ссылку для оплаты
-                    await query.edit_message_text(
-                        f"🔗 Ссылка для оплаты {amount} UAH в {dict((v, k) for k, v in AVAILABLE_CURRENCIES.items()).get(pay_currency, pay_currency)}:\n{pay_url}"
-                    )
-                    # Уведомляем владельцев о создании инвойса
-                    await self.notify_owners_of_invoice_creation(context, user_id, amount, pay_currency, pay_url)
-                    # Уведомляем владельцев о создании заказа (если это не из /pay)
-                    pending_payment = context.user_data.get('pending_payment')
-                    if pending_payment and 'order_id' not in pending_payment: # Это заказ из бота
-                        product_id = pending_payment.get('product_id')
-                        product_name = pending_payment.get('product_name')
-                        order_text = f"🛍️ Хочу замовити: {product_name} за {pending_payment['price_uah']} UAH ({pending_payment['price_usd']}$)"
-                        active_conversations[user_id] = {
-                            'type': pending_payment['type'] + '_order',
-                            'user_info': user,
-                            'assigned_owner': None,
-                            'order_details': order_text,
-                            'last_message': order_text
-                        }
-                        save_active_conversation(user_id, pending_payment['type'] + '_order', None, order_text)
-                        bot_statistics['total_orders'] += 1
-                        save_stats()
-                        await self.forward_order_to_owners(context, user_id, user, order_text)
-                else:
-                    await query.edit_message_text("❌ Не удалось получить ссылку для оплаты. Пожалуйста, попробуйте позже или выберите другой способ.")
-            except Exception as e:
-                logger.error(f"Ошибка обработки инвойса: {e}")
-                await query.edit_message_text("❌ Произошла ошибка при создании платежа.")
+        # ... (інші частини button_handler)
+
+elif query.data.startswith('pay_card_'):
+    try:
+        # Виправлення: правильно отримуємо суму з callback_data
+        parts = query.data.split('_')
+        amount = int(parts[2]) # parts[0]='pay', parts[1]='card', parts[2]='СУМА'
+        
+        # Отримуємо дані про замовлення
+        pending_payment = context.user_data.get('pending_payment')
+        if not pending_payment:
+            await query.edit_message_text("❌ Ошибка: информация о заказе отсутствует.")
+            return
+            
+        # Відображаємо номер картки
+        await query.edit_message_text(
+            f"💳 Оплата по карті:\n`{CARD_NUMBER}`",
+            parse_mode='Markdown'
+        )
+        
+        # Якщо це замовлення з бота (не з /pay), повідомляємо власників
+        if 'order_id' not in pending_payment: 
+            # Це замовлення з бота, створюємо order_text
+            product_name = pending_payment.get('product_name', 'Товар')
+            price_uah = pending_payment.get('price_uah', 0)
+            price_usd = pending_payment.get('price_usd', 0)
+            order_text = f"🛍️ Хочу замовити: {product_name} за {price_uah} UAH ({price_usd}$)"
+            
+            # Зберігаємо активний діалог
+            active_conversations[user_id] = {
+                'type': pending_payment['type'] + '_order',
+                'user_info': user,
+                'assigned_owner': None,
+                'order_details': order_text,
+                'last_message': order_text
+            }
+            save_active_conversation(user_id, pending_payment['type'] + '_order', None, order_text)
+            bot_statistics['total_orders'] += 1
+            save_stats()
+            await self.forward_order_to_owners(context, user_id, user, order_text)
+            
+    except (ValueError, IndexError) as e: # Додано обробку ValueError
+        logger.error(f"Ошибка обработки оплаты по карте: {e}")
+        await query.edit_message_text("❌ Произошла ошибка при обработке оплаты по карте.")
+
+elif query.data.startswith('pay_crypto_'):
+    try:
+        # Виправлення: правильно отримуємо суму з callback_data
+        parts = query.data.split('_')
+        amount = int(parts[2]) # parts[0]='pay', parts[1]='crypto', parts[2]='СУМА'
+        
+        # Отримуємо дані про замовлення
+        pending_payment = context.user_data.get('pending_payment')
+        if not pending_payment:
+            await query.edit_message_text("❌ Ошибка: информация о заказе отсутствует.")
+            return
+            
+        # Створюємо кнопки для вибору криптовалюти
+        keyboard = [
+            [InlineKeyboardButton(name, callback_data=f'pay_crypto_invoice_{amount}_{code}')]
+            for name, code in AVAILABLE_CURRENCIES.items()
+        ]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        await query.edit_message_text(
+            f"Виберіть криптовалюту для оплати {amount} UAH:",
+            reply_markup=reply_markup
+        )
+        
+    except (ValueError, IndexError) as e: # Додано обробку ValueError
+        logger.error(f"Ошибка обработки выбора криптовалюты: {e}")
+        await query.edit_message_text("❌ Произошла ошибка при обработке запроса оплаты криптовалютой.")
+
+elif query.data.startswith('pay_crypto_invoice_'):
+    try:
+        # parts[0]='pay', parts[1]='crypto', parts[2]='invoice', parts[3]='СУМА', parts[4]='Код_валюти'
+        parts = query.data.split('_')
+        amount = int(parts[3]) 
+        pay_currency = parts[4] 
+        
+        # Створюємо інвойс через NowPayments
+        invoice_data = self.create_invoice(context, amount=amount, pay_currency=pay_currency, currency="uah")
+        if "error" in invoice_data:
+            await query.edit_message_text(f"❌ Ошибка создания платежа: {invoice_data['error']}")
+            return
+            
+        pay_url = invoice_data.get("invoice_url")
+        if pay_url:
+            # Відправляємо посилання для оплати
+            currency_name = dict((v, k) for k, v in AVAILABLE_CURRENCIES.items()).get(pay_currency, pay_currency)
+            await query.edit_message_text(
+                f"🔗 Посилання для оплати {amount} UAH в {currency_name}:\n{pay_url}"
+            )
+            
+            # Повідомляємо власників про створення інвойса
+            await self.notify_owners_of_invoice_creation(context, user_id, amount, pay_currency, pay_url)
+            
+            # Якщо це замовлення з бота (не з /pay), повідомляємо власників про замовлення
+            pending_payment = context.user_data.get('pending_payment')
+            if pending_payment and 'order_id' not in pending_payment:
+                # Це замовлення з бота
+                product_name = pending_payment.get('product_name', 'Товар')
+                price_uah = pending_payment.get('price_uah', 0)
+                price_usd = pending_payment.get('price_usd', 0)
+                order_text = f"🛍️ Хочу замовити: {product_name} за {price_uah} UAH ({price_usd}$)"
+                
+                active_conversations[user_id] = {
+                    'type': pending_payment['type'] + '_order',
+                    'user_info': user,
+                    'assigned_owner': None,
+                    'order_details': order_text,
+                    'last_message': order_text
+                }
+                save_active_conversation(user_id, pending_payment['type'] + '_order', None, order_text)
+                bot_statistics['total_orders'] += 1
+                save_stats()
+                await self.forward_order_to_owners(context, user_id, user, order_text)
+                
+        else:
+            await query.edit_message_text("❌ Не вдалося отримати посилання для оплати. Спробуйте пізніше або виберіть інший спосіб.")
+            
+    except (ValueError, IndexError, Exception) as e: # Додано загальну обробку помилок
+        logger.error(f"Ошибка обработки инвойса: {e}")
+        await query.edit_message_text("❌ Произошла ошибка при создании платежа.")
+
+# ... (решта button_handler)
         elif query.data.startswith('payment_completed_'):
             # Обработка оплаты через NowPayments Webhook
             # Это будет обработано в другом месте (например, в webhook)
