@@ -422,6 +422,8 @@ class TelegramBot:
         if not items:
             await update.message.reply_text("❌ Не вдалося розпізнати товари у замовленні. Перевірте формат.")
             return
+        
+        # Обработка заказа из мини-приложения
         order_text = f"🛍️ Замовлення з сайту (#{order_id}):\n"
         total = 0
         order_details = []
@@ -452,22 +454,39 @@ class TelegramBot:
             return
         order_text += f"\n💳 Всього: {total} UAH"
         conversation_type = 'digital_order' if any(item[0] == 'DisU' for item in items) else 'subscription_order'
-        active_conversations[user_id] = {
-            'type': conversation_type,
-            'user_info': user,
-            'assigned_owner': None,
-            'order_details': order_text,
-            'last_message': order_text,
-            'from_website': True
+        
+        # Сохраняем информацию о заказе для последующего использования
+        context.user_data['pending_payment'] = {
+            'order_id': order_id,
+            'items': order_details,
+            'total_uah': total,
+            'total_usd': round(total / EXCHANGE_RATE_UAH_TO_USD, 2)
         }
-        save_active_conversation(user_id, conversation_type, None, order_text)
-        bot_statistics['total_orders'] += len(items)
-        save_stats()
-        await self.forward_order_to_owners(context, user_id, user, order_text)
+        
+        # Отображаем кнопки оплаты
+        keyboard = [
+            [InlineKeyboardButton("💳 Оплата по карте", callback_data=f'pay_card_{total}')],
+            [InlineKeyboardButton("₿ Оплата криптовалютой", callback_data=f'pay_crypto_{total}')]
+        ]
+        reply_markup = InlineKeyboardMarkup(keyboard)
         await update.message.reply_text(
-            f"✅ Ваше замовлення #{order_id} прийнято! Засновник магазину зв'яжеться з вами найближчим часом.\n"
-            "Ви можете продовжити з іншим запитанням або замовленням."
+            f"{order_text}\n\nВыберите способ оплаты:",
+            reply_markup=reply_markup
         )
+        
+        # Сохраняем активный диалог (не обязательно, но можно)
+        # active_conversations[user_id] = {
+        #     'type': conversation_type,
+        #     'user_info': user,
+        #     'assigned_owner': None,
+        #     'order_details': order_text,
+        #     'last_message': order_text,
+        #     'from_website': True
+        # }
+        # save_active_conversation(user_id, conversation_type, None, order_text)
+        # bot_statistics['total_orders'] += len(items)
+        # save_stats()
+        # await self.forward_order_to_owners(context, user_id, user, order_text)
 
     async def handle_document(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         user = update.effective_user
@@ -1128,6 +1147,22 @@ class TelegramBot:
                     f"💳 Оплата по карте:\n`{CARD_NUMBER}`",
                     parse_mode='Markdown'
                 )
+                # Уведомляем владельцев о создании заказа (если это не из /pay)
+                if 'order_id' not in pending_payment: # Это заказ из бота
+                    product_id = pending_payment.get('product_id')
+                    product_name = pending_payment.get('product_name')
+                    order_text = f"🛍️ Хочу замовити: {product_name} за {pending_payment['price_uah']} UAH ({pending_payment['price_usd']}$)"
+                    active_conversations[user_id] = {
+                        'type': pending_payment['type'] + '_order',
+                        'user_info': user,
+                        'assigned_owner': None,
+                        'order_details': order_text,
+                        'last_message': order_text
+                    }
+                    save_active_conversation(user_id, pending_payment['type'] + '_order', None, order_text)
+                    bot_statistics['total_orders'] += 1
+                    save_stats()
+                    await self.forward_order_to_owners(context, user_id, user, order_text)
             except Exception as e:
                 logger.error(f"Ошибка обработки оплаты по карте: {e}")
                 await query.edit_message_text("❌ Произошла ошибка при обработке оплаты.")
@@ -1155,10 +1190,10 @@ class TelegramBot:
         elif query.data.startswith('pay_crypto_invoice_'):
             try:
                 parts = query.data.split('_')
-                amount = int(parts[1])
-                pay_currency = parts[2]
+                amount = int(parts[2]) # Исправлено: правильный индекс
+                pay_currency = parts[3] # Исправлено: правильный индекс
                 # Создаем инвойс через NowPayments
-                invoice_data = create_invoice(amount=amount, pay_currency=pay_currency, currency="uah")
+                invoice_data = self.create_invoice(context, amount=amount, pay_currency=pay_currency, currency="uah")
                 if "error" in invoice_data:
                     await query.edit_message_text(f"❌ Ошибка создания платежа: {invoice_data['error']}")
                     return
@@ -1166,10 +1201,27 @@ class TelegramBot:
                 if pay_url:
                     # Отправляем ссылку для оплаты
                     await query.edit_message_text(
-                        f"🔗 Ссылка для оплаты {amount} UAH в {pay_currency}:\n{pay_url}"
+                        f"🔗 Ссылка для оплаты {amount} UAH в {dict((v, k) for k, v in AVAILABLE_CURRENCIES.items()).get(pay_currency, pay_currency)}:\n{pay_url}"
                     )
                     # Уведомляем владельцев о создании инвойса
                     await self.notify_owners_of_invoice_creation(context, user_id, amount, pay_currency, pay_url)
+                    # Уведомляем владельцев о создании заказа (если это не из /pay)
+                    pending_payment = context.user_data.get('pending_payment')
+                    if pending_payment and 'order_id' not in pending_payment: # Это заказ из бота
+                        product_id = pending_payment.get('product_id')
+                        product_name = pending_payment.get('product_name')
+                        order_text = f"🛍️ Хочу замовити: {product_name} за {pending_payment['price_uah']} UAH ({pending_payment['price_usd']}$)"
+                        active_conversations[user_id] = {
+                            'type': pending_payment['type'] + '_order',
+                            'user_info': user,
+                            'assigned_owner': None,
+                            'order_details': order_text,
+                            'last_message': order_text
+                        }
+                        save_active_conversation(user_id, pending_payment['type'] + '_order', None, order_text)
+                        bot_statistics['total_orders'] += 1
+                        save_stats()
+                        await self.forward_order_to_owners(context, user_id, user, order_text)
                 else:
                     await query.edit_message_text("❌ Не удалось получить ссылку для оплаты. Пожалуйста, попробуйте позже или выберите другой способ.")
             except Exception as e:
@@ -1561,24 +1613,25 @@ class TelegramBot:
                 logger.error(f"❌ Неожиданная ошибка ping: {e}")
             time.sleep(PING_INTERVAL)
 
-    def create_invoice(self, amount, pay_currency="usdtsol", currency="uah"):
+    def create_invoice(self, context, amount, pay_currency="usdtsol", currency="uah"):
         """Создает инвойс через NowPayments API."""
-        if not NOWPAYMENTS_API_KEY:
+        if not NOWPAYMENTS_API_KEY or NOWPAYMENTS_API_KEY == 'YOUR_NOWPAYMENTS_API_KEY_HERE':
             logger.error("NOWPAYMENTS_API_KEY не установлен!")
             return {"error": "API ключ не настроен"}
         url = "https://api.nowpayments.io/v1/invoice"
         headers = {"x-api-key": NOWPAYMENTS_API_KEY}
-        order_id = f"order_{int(time.time())}_{context.user_data.get('selected_product', 'unknown')}"
+        # Генерируем уникальный order_id
+        order_id = f"order_{int(time.time())}_{user_id}" # user_id доступен из контекста вызова
         payload = {
             "price_amount": amount,
             "price_currency": currency,
             "pay_currency": pay_currency,
             "order_id": order_id,
-            "order_description": f"Оплата за {context.user_data.get('selected_product', 'товар')}"
+            "order_description": f"Оплата за заказ"
         }
         try:
             response = requests.post(url, headers=headers, json=payload, timeout=10)
-            response.raise_for_status()
+            response.raise_for_status() # Проверка на HTTP ошибки
             return response.json()
         except requests.exceptions.RequestException as e:
             logger.error(f"Ошибка запроса к NowPayments API: {e}")
@@ -1595,7 +1648,7 @@ class TelegramBot:
         message = f"""
 💰 Инвойс создан для клиента {client_info.first_name}!
 💸 Сумма: {amount} UAH ({round(amount / EXCHANGE_RATE_UAH_TO_USD, 2)}$)
-💱 Криптовалюта: {pay_currency}
+💱 Криптовалюта: {dict((v, k) for k, v in AVAILABLE_CURRENCIES.items()).get(pay_currency, pay_currency)}
 🔗 Ссылка: {pay_url}
 🔔 Клиент должен оплатить по этой ссылке.
         """
