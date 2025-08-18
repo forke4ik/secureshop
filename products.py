@@ -97,3 +97,17 @@ PLAN_MAP = {
     "Fam": "Family", "Plu": "Plus", "Pro": "Pro",
     "Pre": "Premium", "BzN": "Без Nitro", "ZN": "З Nitro"
 }
+
+# Добавляем константы для оплаты из оплата.txt
+NOWPAYMENTS_API_KEY = "FTD5K08-DE94C4F-M9RB0XS-XSGBA26" # Лучше хранить в переменных окружения
+AVAILABLE_CURRENCIES = {
+    "USDT (Solana)": "usdtsol",
+    "USDT (TRC20)": "usdttrc20",
+    "ETH": "eth",
+    "USDT (Arbitrum)": "usdtarb",
+    "USDT (Polygon)": "usdtmatic",   # правильный код
+    "USDT (TON)": "usdtton",         # правильный код
+    "AVAX (C-Chain)": "avax",
+    "APTOS (APT)": "apt"
+}
+CARD_NUMBER = "5355 2800 4715 6045" # Лучше хранить в переменных окружения
