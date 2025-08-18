@@ -15,23 +15,21 @@ import psycopg
 from psycopg.rows import dict_row
 import io
 import requests
-# Импортируем файл с ассортиментом
-import products
+import products  # Импортируем файл с ассортиментом
 
 # Настройка логирования: выводим только WARNING и выше для библиотек, INFO для нашего кода
 logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO)
-# Отключаем подробное логирование для httpx (используется python-telegram-bot)
 logging.getLogger("httpx").setLevel(logging.WARNING)
 logger = logging.getLogger(__name__)
 
 bot_running = False
 bot_lock = threading.Lock()
 BOT_TOKEN = os.getenv('BOT_TOKEN', 'YOUR_BOT_TOKEN_HERE')
-OWNER_ID_1 = 7106925462
-OWNER_ID_2 = 6279578957
+OWNER_ID_1 = int(os.getenv('OWNER_ID_1', '7106925462'))
+OWNER_ID_2 = int(os.getenv('OWNER_ID_2', '6279578957'))
 PORT = int(os.getenv('PORT', 8443))
 WEBHOOK_URL = os.getenv('WEBHOOK_URL', 'https://your-app-url.onrender.com')
-PING_INTERVAL = int(os.getenv('PING_INTERVAL', 8443)) # Исправлена опечатка
+PING_INTERVAL = int(os.getenv('PING_INTERVAL', 840))
 USE_POLLING = os.getenv('USE_POLLING', 'true').lower() == 'true'
 DATABASE_URL = os.getenv('DATABASE_URL', 'postgresql://user:password@host:port/dbname')
 STATS_FILE = "bot_stats.json"
@@ -41,6 +39,23 @@ message_buffer = []
 active_conv_buffer = []
 user_cache = set()
 history_cache = {}
+
+# Конфигурация оплаты
+NOWPAYMENTS_API_KEY = os.getenv('NOWPAYMENTS_API_KEY', 'YOUR_NOWPAYMENTS_API_KEY_HERE')
+CARD_NUMBER = os.getenv('CARD_NUMBER', '5355 2800 4715 6045')
+EXCHANGE_RATE_UAH_TO_USD = float(os.getenv('EXCHANGE_RATE_UAH_TO_USD', '41.26'))  # Курс UAH к USD
+
+# Доступные криптовалюты для оплаты
+AVAILABLE_CURRENCIES = {
+    "USDT (Solana)": "usdtsol",
+    "USDT (TRC20)": "usdttrc20",
+    "ETH": "eth",
+    "USDT (Arbitrum)": "usdtarb",
+    "USDT (Polygon)": "usdtmatic",
+    "USDT (TON)": "usdtton",
+    "AVAX (C-Chain)": "avax",
+    "APTOS (APT)": "apt"
+}
 
 def flush_message_buffer():
     global message_buffer
@@ -63,7 +78,6 @@ def flush_message_buffer():
                     SELECT user_id, message, is_from_user
                     FROM temp_messages
                 """)
-        # logger.info(f"✅ Сброшен буфер сообщений ({len(message_buffer)} записей)") # Убрано логирование
     except Exception as e:
         logger.error(f"❌ Ошибка сброса буфера сообщений: {e}")
     finally:
@@ -102,7 +116,6 @@ def flush_active_conv_buffer():
                         updated_at = CURRENT_TIMESTAMP
                     WHERE ac.updated_at < EXCLUDED.updated_at;
                 """)
-        # logger.info(f"✅ Сброшен буфер диалогов ({len(active_conv_buffer)} записей)") # Убрано логирование
     except Exception as e:
         logger.error(f"❌ Ошибка сброса буфера диалогов: {e}")
     finally:
@@ -151,7 +164,6 @@ def init_db():
                 """)
                 cur.execute("CREATE INDEX IF NOT EXISTS idx_messages_user_id ON messages(user_id);")
                 cur.execute("CREATE INDEX IF NOT EXISTS idx_messages_created_at ON messages(created_at);")
-        # logger.info("✅ База данных инициализирована") # Убрано логирование
     except Exception as e:
         logger.error(f"❌ Ошибка инициализации базы данных: {e}")
 
@@ -200,7 +212,6 @@ def delete_active_conversation(user_id):
         with psycopg.connect(DATABASE_URL) as conn:
             with conn.cursor() as cur:
                 cur.execute("DELETE FROM active_conversations WHERE user_id = %s", (user_id,))
-        # logger.info(f"🗑️ Диалог пользователя {user_id} удален из БД") # Убрано логирование
     except Exception as e:
         logger.error(f"❌ Ошибка удаления активного диалога для {user_id}: {e}")
 
@@ -251,7 +262,6 @@ def clear_all_active_conversations():
             with conn.cursor() as cur:
                 cur.execute("DELETE FROM active_conversations")
                 deleted_count = cur.rowcount
-        # logger.info(f"🗑️ Удалено {deleted_count} активных диалогов из БД") # Убрано логирование
         return deleted_count
     except Exception as e:
         logger.error(f"❌ Ошибка очистки активных диалогов: {e}")
@@ -350,7 +360,6 @@ class TelegramBot:
             await self.application.initialize()
             await self.set_commands_menu()
             self.initialized = True
-            # logger.info("✅ Telegram Application инициализирован") # Убрано логирование
         except Exception as e:
             logger.error(f"❌ Ошибка инициализации Telegram Application: {e}")
             raise
@@ -358,18 +367,14 @@ class TelegramBot:
     async def start_polling(self):
         try:
             if self.application.updater.running:
-                # logger.warning("🛑 Бот уже запущен! Пропускаем повторный запуск") # Убрано логирование
                 return
-            # logger.info("🔄 Запуск polling режима...") # Убрано логирование
             await self.application.start()
             await self.application.updater.start_polling(
                 poll_interval=1.0, timeout=10, bootstrap_retries=-1,
                 read_timeout=10, write_timeout=10, connect_timeout=10, pool_timeout=10
             )
-            # logger.info("✅ Polling запущен") # Убрано логирование
         except Conflict as e:
             logger.error(f"🚨 Конфликт: {e}")
-            # logger.warning("🕒 Ожидаем 15 секунд перед повторной попыткой...") # Убрано логирование
             await asyncio.sleep(15)
             await self.start_polling()
         except Exception as e:
@@ -384,7 +389,6 @@ class TelegramBot:
                 await self.application.stop()
             if self.application.post_init:
                 await self.application.shutdown()
-            # logger.info("🛑 Polling полностью остановлен") # Убрано логирование
         except Exception as e:
             logger.error(f"❌ Ошибка остановки polling: {e}")
 
@@ -392,9 +396,8 @@ class TelegramBot:
         user = update.effective_user
         ensure_user_exists(user)
         if user.id in [OWNER_ID_1, OWNER_ID_2]:
-            # owner_name = "@HiGki2pYYY" if user.id == OWNER_ID_1 else "@oc33t" # Убрано, так как не используется
-            # await update.message.reply_text(f"Добро пожаловать, {user.first_name}! ({owner_name}) Вы вошли как основатель магазина.") # Упрощено
-            await update.message.reply_text(f"Добро пожаловать, {user.first_name}! Вы вошли как основатель магазина.")
+            owner_name = "@HiGki2pYYY" if user.id == OWNER_ID_1 else "@oc33t"
+            await update.message.reply_text(f"Добро пожаловать, {user.first_name}! ({owner_name})\nВы вошли как основатель магазина.")
             return
         keyboard = [
             [InlineKeyboardButton("🛒 Зробити замовлення", callback_data='order')],
@@ -427,11 +430,8 @@ class TelegramBot:
             plan_abbr = item[1]
             period = item[2].strip()
             price = item[3]
-            # Используем словари из products.py
-            # service_map = { ... } # Удалено
-            # plan_map = { ... } # Удалено
-            service_name = products.SERVICE_MAP.get(service_abbr, service_abbr) # Изменено
-            plan_name = products.PLAN_MAP.get(plan_abbr, plan_abbr) # Изменено
+            service_name = products.SERVICE_MAP.get(service_abbr, service_abbr)
+            plan_name = products.PLAN_MAP.get(plan_abbr, plan_abbr)
             try:
                 price_num = int(price)
                 total += price_num
@@ -655,7 +655,6 @@ class TelegramBot:
         first_start = datetime.fromisoformat(bot_statistics['first_start'])
         last_save = datetime.fromisoformat(bot_statistics['last_save'])
         uptime = datetime.now() - first_start
-        # Удалена строка "Усього користувачів (файл)"
         stats_message = f"""
 📊 Статистика бота:
 👤 Усього користувачів (БД): {total_users_db}
@@ -700,7 +699,7 @@ class TelegramBot:
             with psycopg.connect(DATABASE_URL) as conn:
                 with conn.cursor(row_factory=dict_row) as cur:
                     cur.execute("""
-                        SELECT ac.*, u.first_name, u.username
+                        SELECT ac.*, u.first_name, u.username 
                         FROM active_conversations ac
                         JOIN users u ON ac.user_id = u.id
                         ORDER BY ac.updated_at DESC
@@ -827,9 +826,9 @@ class TelegramBot:
         else:
             active_conversations[client_id]['assigned_owner'] = owner_id
             save_active_conversation(
-                client_id,
-                active_conversations[client_id]['type'],
-                owner_id,
+                client_id, 
+                active_conversations[client_id]['type'], 
+                owner_id, 
                 active_conversations[client_id]['last_message']
             )
         owner_client_map[owner_id] = client_id
@@ -1031,15 +1030,15 @@ class TelegramBot:
             'netflix_1'
         ]:
             context.user_data['selected_product'] = query.data
-            # product_info = self.get_product_info(query.data) # Удалено
-            product_info = products.SUBSCRIPTION_PRODUCTS.get(query.data, {'name': "Невідомий товар", 'price': 0}) # Изменено
-            # keyboard = [ ... self.get_back_action(...) ... ] # Удалено
+            product_info = products.SUBSCRIPTION_PRODUCTS.get(query.data, {'name': "Невідомий товар", 'price': 0})
+            # Конвертируем цену в USD
+            price_usd = round(product_info['price'] / EXCHANGE_RATE_UAH_TO_USD, 2)
             keyboard = [
                 [InlineKeyboardButton("✅ Замовити", callback_data='confirm_subscription_order')],
-                [InlineKeyboardButton("⬅️ Назад", callback_data=products.SUBSCRIPTION_BACK_MAP.get(query.data, 'order_subscriptions'))] # Изменено
+                [InlineKeyboardButton("⬅️ Назад", callback_data=products.SUBSCRIPTION_BACK_MAP.get(query.data, 'order_subscriptions'))]
             ]
             await query.edit_message_text(
-                f"🛒 Ви обрали:\n{product_info['name']}\n💵 Ціна: {product_info['price']} UAH\n"
+                f"🛒 Ви обрали:\n{product_info['name']}\n💵 Ціна: {product_info['price']} UAH ({price_usd}$)\n"
                 f"Натисніть \"✅ Замовити\" для підтвердження замовлення.",
                 reply_markup=InlineKeyboardMarkup(keyboard)
             )
@@ -1052,15 +1051,15 @@ class TelegramBot:
             'discord_decor_zn_9', 'discord_decor_zn_14', 'discord_decor_zn_22'
         ]:
             context.user_data['selected_product'] = query.data
-            # product_info = self.get_digital_product_info(query.data) # Удалено
-            product_info = products.DIGITAL_PRODUCTS.get(query.data, {'name': "Невідомий цифровий товар", 'price': 0}) # Изменено
-            # keyboard = [ ... self.get_digital_back_action(...) ... ] # Удалено
+            product_info = products.DIGITAL_PRODUCTS.get(query.data, {'name': "Невідомий цифровий товар", 'price': 0})
+            # Конвертируем цену в USD
+            price_usd = round(product_info['price'] / EXCHANGE_RATE_UAH_TO_USD, 2)
             keyboard = [
                 [InlineKeyboardButton("✅ Замовити", callback_data='confirm_digital_order')],
-                [InlineKeyboardButton("⬅️ Назад", callback_data=products.DIGITAL_BACK_MAP.get(query.data, 'category_discord_decor'))] # Изменено
+                [InlineKeyboardButton("⬅️ Назад", callback_data=products.DIGITAL_BACK_MAP.get(query.data, 'category_discord_decor'))]
             ]
             await query.edit_message_text(
-                f"🎮 Ви обрали:\n{product_info['name']}\n💵 Ціна: {product_info['price']} UAH\n"
+                f"🎮 Ви обрали:\n{product_info['name']}\n💵 Ціна: {product_info['price']} UAH ({price_usd}$)\n"
                 f"Натисніть \"✅ Замовити\" для підтвердження замовлення.",
                 reply_markup=InlineKeyboardMarkup(keyboard)
             )
@@ -1069,49 +1068,117 @@ class TelegramBot:
             if not selected_product:
                 await query.edit_message_text("❌ Помилка: товар не обраний")
                 return
-            # product_info = self.get_product_info(selected_product) # Удалено
-            product_info = products.SUBSCRIPTION_PRODUCTS.get(selected_product, {'name': "Невідомий товар", 'price': 0}) # Изменено
-            order_text = f"🛍️ Хочу замовити: {product_info['name']} за {product_info['price']} UAH"
-            active_conversations[user_id] = {
-                'type': 'subscription_order',
-                'user_info': user,
-                'assigned_owner': None,
-                'order_details': order_text,
-                'last_message': order_text
+            product_info = products.SUBSCRIPTION_PRODUCTS.get(selected_product, {'name': "Невідомий товар", 'price': 0})
+            # Конвертируем цену в USD
+            price_usd = round(product_info['price'] / EXCHANGE_RATE_UAH_TO_USD, 2)
+            order_text = f"🛍️ Хочу замовити: {product_info['name']} за {product_info['price']} UAH ({price_usd}$)"
+            # Сохраняем информацию о заказе для последующего использования
+            context.user_data['pending_payment'] = {
+                'product_id': selected_product,
+                'product_name': product_info['name'],
+                'price_uah': product_info['price'],
+                'price_usd': price_usd,
+                'type': 'subscription'
             }
-            save_active_conversation(user_id, 'subscription_order', None, order_text)
-            bot_statistics['total_orders'] += 1
-            save_stats()
+            # Отображаем кнопки оплаты
+            keyboard = [
+                [InlineKeyboardButton("💳 Оплата по карте", callback_data=f'pay_card_{product_info["price"]}')],
+                [InlineKeyboardButton("₿ Оплата криптовалютой", callback_data=f'pay_crypto_{product_info["price"]}')]
+            ]
             await query.edit_message_text(
-                "✅ Ваше замовлення прийнято! Засновник магазину зв'яжеться з вами найближчим часом.\n"
-                "Ви можете продовжити з іншим запитанням або замовленням.",
-                reply_markup=None
+                f"{order_text}\n\nВыберите способ оплаты:",
+                reply_markup=InlineKeyboardMarkup(keyboard)
             )
-            await self.forward_order_to_owners(context, user_id, user, order_text)
         elif query.data == 'confirm_digital_order':
             selected_product = context.user_data.get('selected_product')
             if not selected_product:
                 await query.edit_message_text("❌ Помилка: товар не обраний")
                 return
-            # product_info = self.get_digital_product_info(selected_product) # Удалено
-            product_info = products.DIGITAL_PRODUCTS.get(selected_product, {'name': "Невідомий цифровий товар", 'price': 0}) # Изменено
-            order_text = f"🎮 Хочу замовити: {product_info['name']} за {product_info['price']} UAH"
-            active_conversations[user_id] = {
-                'type': 'digital_order',
-                'user_info': user,
-                'assigned_owner': None,
-                'order_details': order_text,
-                'last_message': order_text
+            product_info = products.DIGITAL_PRODUCTS.get(selected_product, {'name': "Невідомий цифровий товар", 'price': 0})
+            # Конвертируем цену в USD
+            price_usd = round(product_info['price'] / EXCHANGE_RATE_UAH_TO_USD, 2)
+            order_text = f"🎮 Хочу замовити: {product_info['name']} за {product_info['price']} UAH ({price_usd}$)"
+            # Сохраняем информацию о заказе для последующего использования
+            context.user_data['pending_payment'] = {
+                'product_id': selected_product,
+                'product_name': product_info['name'],
+                'price_uah': product_info['price'],
+                'price_usd': price_usd,
+                'type': 'digital'
             }
-            save_active_conversation(user_id, 'digital_order', None, order_text)
-            bot_statistics['total_orders'] += 1
-            save_stats()
+            # Отображаем кнопки оплаты
+            keyboard = [
+                [InlineKeyboardButton("💳 Оплата по карте", callback_data=f'pay_card_{product_info["price"]}')],
+                [InlineKeyboardButton("₿ Оплата криптовалютой", callback_data=f'pay_crypto_{product_info["price"]}')]
+            ]
             await query.edit_message_text(
-                "✅ Ваше замовлення прийнято! Засновник магазину зв'яжеться з вами найближчим часом.\n"
-                "Ви можете продовжити з іншим запитанням або замовленням.",
-                reply_markup=None
+                f"{order_text}\n\nВыберите способ оплаты:",
+                reply_markup=InlineKeyboardMarkup(keyboard)
             )
-            await self.forward_order_to_owners(context, user_id, user, order_text)
+        elif query.data.startswith('pay_card_'):
+            try:
+                amount = int(query.data.split('_')[1])
+                # Получаем данные о заказе
+                pending_payment = context.user_data.get('pending_payment')
+                if not pending_payment:
+                    await query.edit_message_text("❌ Ошибка: информация о заказе отсутствует.")
+                    return
+                # Отображаем номер карты
+                await query.edit_message_text(
+                    f"💳 Оплата по карте:\n`{CARD_NUMBER}`",
+                    parse_mode='Markdown'
+                )
+            except Exception as e:
+                logger.error(f"Ошибка обработки оплаты по карте: {e}")
+                await query.edit_message_text("❌ Произошла ошибка при обработке оплаты.")
+        elif query.data.startswith('pay_crypto_'):
+            try:
+                amount = int(query.data.split('_')[1])
+                # Получаем данные о заказе
+                pending_payment = context.user_data.get('pending_payment')
+                if not pending_payment:
+                    await query.edit_message_text("❌ Ошибка: информация о заказе отсутствует.")
+                    return
+                # Создаем кнопки для выбора криптовалюты
+                keyboard = [
+                    [InlineKeyboardButton(name, callback_data=f'pay_crypto_invoice_{amount}_{code}')]
+                    for name, code in AVAILABLE_CURRENCIES.items()
+                ]
+                reply_markup = InlineKeyboardMarkup(keyboard)
+                await query.edit_message_text(
+                    f"Выберите криптовалюту для оплаты {amount} UAH:",
+                    reply_markup=reply_markup
+                )
+            except Exception as e:
+                logger.error(f"Ошибка обработки выбора криптовалюты: {e}")
+                await query.edit_message_text("❌ Произошла ошибка при обработке запроса.")
+        elif query.data.startswith('pay_crypto_invoice_'):
+            try:
+                parts = query.data.split('_')
+                amount = int(parts[1])
+                pay_currency = parts[2]
+                # Создаем инвойс через NowPayments
+                invoice_data = create_invoice(amount=amount, pay_currency=pay_currency, currency="uah")
+                if "error" in invoice_data:
+                    await query.edit_message_text(f"❌ Ошибка создания платежа: {invoice_data['error']}")
+                    return
+                pay_url = invoice_data.get("invoice_url")
+                if pay_url:
+                    # Отправляем ссылку для оплаты
+                    await query.edit_message_text(
+                        f"🔗 Ссылка для оплаты {amount} UAH в {pay_currency}:\n{pay_url}"
+                    )
+                    # Уведомляем владельцев о создании инвойса
+                    await self.notify_owners_of_invoice_creation(context, user_id, amount, pay_currency, pay_url)
+                else:
+                    await query.edit_message_text("❌ Не удалось получить ссылку для оплаты. Пожалуйста, попробуйте позже или выберите другой способ.")
+            except Exception as e:
+                logger.error(f"Ошибка обработки инвойса: {e}")
+                await query.edit_message_text("❌ Произошла ошибка при создании платежа.")
+        elif query.data.startswith('payment_completed_'):
+            # Обработка оплаты через NowPayments Webhook
+            # Это будет обработано в другом месте (например, в webhook)
+            pass
         elif query.data == 'question':
             if user_id in active_conversations:
                 await query.answer(
@@ -1143,9 +1210,9 @@ class TelegramBot:
             active_conversations[client_id]['assigned_owner'] = owner_id
             owner_client_map[owner_id] = client_id
             save_active_conversation(
-                client_id,
-                active_conversations[client_id]['type'],
-                owner_id,
+                client_id, 
+                active_conversations[client_id]['type'], 
+                owner_id, 
                 active_conversations[client_id]['last_message']
             )
             client_info = active_conversations[client_id]['user_info']
@@ -1182,9 +1249,9 @@ class TelegramBot:
                 if current_owner in owner_client_map:
                     del owner_client_map[current_owner]
                 save_active_conversation(
-                    client_id,
-                    active_conversations[client_id]['type'],
-                    other_owner,
+                    client_id, 
+                    active_conversations[client_id]['type'], 
+                    other_owner, 
                     active_conversations[client_id]['last_message']
                 )
                 client_info = active_conversations[client_id]['user_info']
@@ -1218,9 +1285,9 @@ class TelegramBot:
             active_conversations[client_id]['assigned_owner'] = owner_id
             owner_client_map[owner_id] = client_id
             save_active_conversation(
-                client_id,
-                active_conversations[client_id]['type'],
-                owner_id,
+                client_id, 
+                active_conversations[client_id]['type'], 
+                owner_id, 
                 active_conversations[client_id]['last_message']
             )
             history = get_conversation_history(client_id)
@@ -1269,9 +1336,9 @@ class TelegramBot:
         active_conversations[user_id]['last_message'] = message_text
         save_message(user_id, message_text, True)
         save_active_conversation(
-            user_id,
-            active_conversations[user_id]['type'],
-            active_conversations[user_id].get('assigned_owner'),
+            user_id, 
+            active_conversations[user_id]['type'], 
+            active_conversations[user_id].get('assigned_owner'), 
             message_text
         )
         await self.forward_to_owner(update, context)
@@ -1286,19 +1353,19 @@ class TelegramBot:
         assigned_owner = active_conversations[user_id].get('assigned_owner')
         if not assigned_owner:
             await self.forward_to_both_owners(
-                context,
-                user_id,
-                user_info,
-                conversation_type,
+                context, 
+                user_id, 
+                user_info, 
+                conversation_type, 
                 update.message.text
             )
             return
         await self.forward_to_specific_owner(
-            context,
-            user_id,
-            user_info,
-            conversation_type,
-            update.message.text,
+            context, 
+            user_id, 
+            user_info, 
+            conversation_type, 
+            update.message.text, 
             assigned_owner
         )
 
@@ -1383,9 +1450,9 @@ class TelegramBot:
             active_conversations[client_id]['assigned_owner'] = other_owner
             owner_client_map[other_owner] = client_id
             save_active_conversation(
-                client_id,
-                conversation_type,
-                other_owner,
+                client_id, 
+                conversation_type, 
+                other_owner, 
                 message_text
             )
             await self.forward_to_specific_owner(context, client_id, client_info, conversation_type, message_text, other_owner)
@@ -1415,7 +1482,6 @@ class TelegramBot:
             [InlineKeyboardButton("✅ Взяти", callback_data=f'take_order_{client_id}')]
         ]
         reply_markup = InlineKeyboardMarkup(keyboard)
-        # logger.info(f"📤 Пересылаем заказ владельцам: {order_text[:50]}...") # Убрано логирование
         for owner_id in [OWNER_ID_1, OWNER_ID_2]:
             try:
                 await context.bot.send_message(
@@ -1423,18 +1489,17 @@ class TelegramBot:
                     text=forward_message.strip(),
                     reply_markup=reply_markup
                 )
-                # logger.info(f"  ✅ Уведомление отправлено владельцу {owner_id}") # Убрано логирование
             except Exception as e:
-                logger.error(f"  ❌ Ошибка отправки владельцу {owner_id}: {e}")
+                logger.error(f"Ошибка отправки владельцу {owner_id}: {e}")
 
     async def handle_owner_message(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         owner = update.effective_user
         owner_id = owner.id
         ensure_user_exists(owner)
         if owner_id not in owner_client_map:
-            # owner_name = "@HiGki2pYYY" if owner_id == OWNER_ID_1 else "@oc33t" # Убрано, не используется
+            owner_name = "@HiGki2pYYY" if owner_id == OWNER_ID_1 else "@oc33t"
             await update.message.reply_text(
-                f"У вас немає активного клієнта для відповіді.\n"
+                f"У вас немає активного клієнта для відповіді. ({owner_name})\n"
                 f"Дочекайтесь нового повідомлення від клієнта або скористайтесь командою /dialog."
             )
             return
@@ -1450,9 +1515,9 @@ class TelegramBot:
             save_message(client_id, message_text, False)
             active_conversations[client_id]['last_message'] = message_text
             save_active_conversation(
-                client_id,
-                active_conversations[client_id]['type'],
-                owner_id,
+                client_id, 
+                active_conversations[client_id]['type'], 
+                owner_id, 
                 message_text
             )
             await context.bot.send_message(
@@ -1479,7 +1544,6 @@ class TelegramBot:
             ping_thread = threading.Thread(target=self.ping_loop)
             ping_thread.daemon = True
             ping_thread.start()
-            # logger.info("🔄 Пинговалка запущена") # Убрано логирование
 
     def ping_loop(self):
         import requests
@@ -1488,7 +1552,6 @@ class TelegramBot:
             try:
                 response = requests.get(ping_url, timeout=10)
                 if response.status_code == 200:
-                    # logger.info("✅ Ping успешен - сервис активен") # Убрано логирование
                     pass
                 else:
                     logger.warning(f"⚠️ Ping вернул статус {response.status_code}")
@@ -1498,7 +1561,49 @@ class TelegramBot:
                 logger.error(f"❌ Неожиданная ошибка ping: {e}")
             time.sleep(PING_INTERVAL)
 
-    # Удалены методы get_product_info, get_digital_product_info, get_back_action, get_digital_back_action
+    def create_invoice(self, amount, pay_currency="usdtsol", currency="uah"):
+        """Создает инвойс через NowPayments API."""
+        if not NOWPAYMENTS_API_KEY:
+            logger.error("NOWPAYMENTS_API_KEY не установлен!")
+            return {"error": "API ключ не настроен"}
+        url = "https://api.nowpayments.io/v1/invoice"
+        headers = {"x-api-key": NOWPAYMENTS_API_KEY}
+        order_id = f"order_{int(time.time())}_{context.user_data.get('selected_product', 'unknown')}"
+        payload = {
+            "price_amount": amount,
+            "price_currency": currency,
+            "pay_currency": pay_currency,
+            "order_id": order_id,
+            "order_description": f"Оплата за {context.user_data.get('selected_product', 'товар')}"
+        }
+        try:
+            response = requests.post(url, headers=headers, json=payload, timeout=10)
+            response.raise_for_status()
+            return response.json()
+        except requests.exceptions.RequestException as e:
+            logger.error(f"Ошибка запроса к NowPayments API: {e}")
+            return {"error": f"Ошибка API: {e}"}
+        except Exception as e:
+            logger.error(f"Неожиданная ошибка при создании инвойса: {e}")
+            return {"error": f"Внутренняя ошибка: {e}"}
+
+    async def notify_owners_of_invoice_creation(self, context, client_id, amount, pay_currency, pay_url):
+        """Уведомляет владельцев о создании инвойса."""
+        client_info = active_conversations.get(client_id, {}).get('user_info')
+        if not client_info:
+            return
+        message = f"""
+💰 Инвойс создан для клиента {client_info.first_name}!
+💸 Сумма: {amount} UAH ({round(amount / EXCHANGE_RATE_UAH_TO_USD, 2)}$)
+💱 Криптовалюта: {pay_currency}
+🔗 Ссылка: {pay_url}
+🔔 Клиент должен оплатить по этой ссылке.
+        """
+        for owner_id in [OWNER_ID_1, OWNER_ID_2]:
+            try:
+                await context.bot.send_message(chat_id=owner_id, text=message)
+            except Exception as e:
+                logger.error(f"Ошибка уведомления владельца {owner_id}: {e}")
 
 bot_instance = TelegramBot()
 
@@ -1572,30 +1677,18 @@ def auto_save_loop():
     while True:
         time.sleep(300)
         save_stats()
-        # logger.info("✅ Статистика автосохранена") # Убрано логирование
 
 def main():
     if os.environ.get('RENDER'):
-        # logger.info("⏳ Ожидаем 10 секунд для предотвращения конфликтов...") # Убрано логирование
         time.sleep(10)
     auto_save_thread = threading.Thread(target=auto_save_loop)
     auto_save_thread.daemon = True
     auto_save_thread.start()
-    # logger.info("🚀 Запуск SecureShop Telegram Bot...") # Убрано логирование
-    # logger.info(f"🔑 BOT_TOKEN: {BOT_TOKEN[:10]}...") # Убрано логирование
-    # logger.info(f"🌐 PORT: {PORT}") # Убрано логирование
-    # logger.info(f"📡 WEBHOOK_URL: {WEBHOOK_URL}") # Убрано логирование
-    # logger.info(f"⏰ PING_INTERVAL: {PING_INTERVAL} секунд") # Убрано логирование
-    # logger.info(f"🔄 РЕЖИМ: {'Polling' if USE_POLLING else 'Webhook'}") # Убрано логирование
-    # logger.info(f"👤 Основатель 1: {OWNER_ID_1} (@HiGki2pYYY)") # Убрано логирование
-    # logger.info(f"👤 Основатель 2: {OWNER_ID_2} (@oc33t)") # Убрано логирование
-    # logger.info(f"💾 DATABASE_URL: {DATABASE_URL[:30]}...") # Убрано логирование
     bot_thread_instance = threading.Thread(target=bot_thread)
     bot_thread_instance.daemon = True
     bot_thread_instance.start()
     time.sleep(3)
     bot_instance.start_ping_service()
-    # logger.info("🌐 Запуск Flask сервера...") # Убрано логирование
     flask_app.run(
         host='0.0.0.0',
         port=PORT,
@@ -1608,24 +1701,21 @@ async def setup_webhook():
     if USE_POLLING:
         try:
             await telegram_app.bot.delete_webhook()
-            # logger.info("🗑️ Webhook удален - используется polling режим") # Убрано логирование
         except Exception as e:
             logger.error(f"Ошибка удаления webhook: {e}")
         return True
     try:
         webhook_url = f"{WEBHOOK_URL}/{BOT_TOKEN}"
         await telegram_app.bot.set_webhook(webhook_url)
-        # logger.info(f"✅ Webhook установлен: {webhook_url}") # Убрано логирование
         return True
     except Exception as e:
-        logger.error(f"❌ Ошибка установки webhook: {e}")
+        logger.error(f"Ошибка установки webhook: {e}")
         return False
 
 async def start_bot():
     global telegram_app, bot_running
     with bot_lock:
         if bot_running:
-            # logger.warning("🛑 Бот уже запущен! Пропускаем повторный запуск") # Убрано логирование
             return
         try:
             await bot_instance.initialize()
@@ -1634,12 +1724,10 @@ async def start_bot():
                 await setup_webhook()
                 await bot_instance.start_polling()
                 bot_running = True
-                # logger.info("✅ Бот запущен в polling режиме") # Убрано логирование
             else:
                 success = await setup_webhook()
                 if success:
                     bot_running = True
-                    # logger.info("✅ Бот запущен в webhook режиме") # Убрано логирование
                 else:
                     logger.error("❌ Не удалось настроить webhook")
         except Exception as e:
@@ -1657,12 +1745,10 @@ def bot_thread():
             loop.run_forever()
     except Conflict as e:
         logger.error(f"🚨 Конфликт: {e}")
-        # logger.warning("🕒 Ожидаем 30 секунд перед повторной попыткой...") # Убрано логирование
         time.sleep(30)
         bot_thread()
     except Exception as e:
         logger.error(f"❌ Критическая ошибка в bot_thread: {e}")
-        # logger.warning("🕒 Ожидаем 15 секунд перед повторным запуском...") # Убрано логирование
         time.sleep(15)
         bot_thread()
     finally:
@@ -1671,7 +1757,6 @@ def bot_thread():
                 loop.close()
         except:
             pass
-        # logger.warning("🔁 Перезапускаем поток бота...") # Убрано логирование
         time.sleep(5)
         bot_thread()
 
