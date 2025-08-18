@@ -1137,7 +1137,21 @@ class TelegramBot:
                 if not pending_payment:
                     await query.edit_message_text("❌ Ошибка: информация о заказе отсутствует.")
                     return
-                invoice_data = self.create_invoice(amount=amount, pay_currency=pay_currency_code, currency="uah")
+
+                # Передаем order_id или другой идентификатор из pending_payment
+                order_id_for_api = pending_payment.get('order_id', 'unknown')
+                if 'product_id' in pending_payment:
+                    order_id_for_api = pending_payment['product_id']
+                # Или используем временную метку
+                # order_id_for_api = str(int(time.time()))
+
+                # Создаем инвойс, передавая order_id_suffix
+                invoice_data = self.create_invoice(
+                    amount=amount, 
+                    pay_currency=pay_currency_code, 
+                    currency="uah",
+                    order_id_suffix=order_id_for_api # Передаем суффикс order_id
+                )
                 if "error" in invoice_data:
                     await query.edit_message_text(f"❌ Ошибка создания платежа: {invoice_data['error']}")
                     return
