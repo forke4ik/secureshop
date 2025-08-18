@@ -1134,8 +1134,7 @@ class TelegramBot:
                 f"{order_text}\n\nВыберите способ оплаты:",
                 reply_markup=InlineKeyboardMarkup(keyboard)
             )
-        # ... (інші частини button_handler)
-
+            
 elif query.data.startswith('pay_card_'):
     try:
         # Виправлення: правильно отримуємо суму з callback_data
