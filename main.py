@@ -470,7 +470,7 @@ class TelegramBot:
             logger.error(f"Помилка парсингу JSON: {e}")
             await update.message.reply_text("❌ Файл має неправильний формат JSON.")
             return
-        if 'items' not in order_data or 'total' not in order_
+        if 'items' not in order_data or 'total' not in order_data: # Виправлено
             await update.message.reply_text("❌ У файлі відсутні обов'язкові поля (items, total).")
             return
         order_text = "🛍️ Замовлення з сайту (з файлу):\n"
@@ -1143,7 +1143,7 @@ class TelegramBot:
                 elif 'product_id' in pending_payment:
                     order_id_suffix = pending_payment['product_id']
                 invoice_data = self.create_invoice(amount=amount, pay_currency=pay_currency_code, currency="uah", order_id_suffix=order_id_suffix)
-                if "error" in invoice_
+                if "error" in invoice_data:
                     await query.edit_message_text(f"❌ Ошибка создания платежа: {invoice_data['error']}")
                     return
                 pay_url = invoice_data.get("invoice_url")
@@ -1699,7 +1699,7 @@ def webhook():
         return jsonify({'error': 'Bot not initialized'}), 500
     try:
         json_data = request.get_json()
-        if json_
+        if json_data:
             update = Update.de_json(json_data, telegram_app.bot)
             pass
         return '', 200
