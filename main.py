@@ -16,11 +16,9 @@ from psycopg.rows import dict_row
 import io
 import requests
 import products
-
 logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO)
 logging.getLogger("httpx").setLevel(logging.WARNING)
 logger = logging.getLogger(__name__)
-
 bot_running = False
 bot_lock = threading.Lock()
 BOT_TOKEN = os.getenv('BOT_TOKEN', 'YOUR_BOT_TOKEN_HERE')
@@ -38,6 +36,8 @@ message_buffer = []
 active_conv_buffer = []
 user_cache = set()
 history_cache = {}
+# --- URL вашего мини-приложения ---
+MINI_APP_URL = os.getenv('MINI_APP_URL', 'https://secureshop-web-tau.vercel.app') # <<< ЗАМЕНИТЕ НА РЕАЛЬНЫЙ URL
 
 def flush_message_buffer():
     global message_buffer
@@ -64,7 +64,6 @@ def flush_message_buffer():
         logger.error(f"❌ Ошибка сброса буфера сообщений: {e}")
     finally:
         message_buffer = []
-
 def flush_active_conv_buffer():
     global active_conv_buffer
     if not active_conv_buffer:
@@ -102,13 +101,11 @@ def flush_active_conv_buffer():
         logger.error(f"❌ Ошибка сброса буфера диалогов: {e}")
     finally:
         active_conv_buffer = []
-
 def buffer_flush_thread():
     while True:
         time.sleep(BUFFER_FLUSH_INTERVAL)
         flush_message_buffer()
         flush_active_conv_buffer()
-
 def init_db():
     try:
         with psycopg.connect(DATABASE_URL) as conn:
@@ -148,7 +145,6 @@ def init_db():
                 cur.execute("CREATE INDEX IF NOT EXISTS idx_messages_created_at ON messages(created_at);")
     except Exception as e:
         logger.error(f"❌ Ошибка инициализации базы данных: {e}")
-
 def ensure_user_exists(user):
     if user.id in user_cache:
         return
@@ -169,13 +165,11 @@ def ensure_user_exists(user):
         user_cache.add(user.id)
     except Exception as e:
         logger.error(f"❌ Ошибка сохранения пользователя: {e}")
-
 def save_message(user_id, message_text, is_from_user):
     global message_buffer
     message_buffer.append((user_id, message_text, is_from_user))
     if len(message_buffer) >= BUFFER_MAX_SIZE:
         flush_message_buffer()
-
 def save_active_conversation(user_id, conversation_type, assigned_owner, last_message):
     global active_conv_buffer
     updated = False
@@ -188,7 +182,6 @@ def save_active_conversation(user_id, conversation_type, assigned_owner, last_me
         active_conv_buffer.append((user_id, conversation_type, assigned_owner, last_message))
     if len(active_conv_buffer) >= BUFFER_MAX_SIZE:
         flush_active_conv_buffer()
-
 def delete_active_conversation(user_id):
     try:
         with psycopg.connect(DATABASE_URL) as conn:
@@ -196,7 +189,6 @@ def delete_active_conversation(user_id):
                 cur.execute("DELETE FROM active_conversations WHERE user_id = %s", (user_id,))
     except Exception as e:
         logger.error(f"❌ Ошибка удаления активного диалога для {user_id}: {e}")
-
 def get_conversation_history(user_id, limit=50):
     flush_message_buffer()
     cache_key = f"{user_id}_{limit}"
@@ -217,7 +209,6 @@ def get_conversation_history(user_id, limit=50):
     except Exception as e:
         logger.error(f"❌ Ошибка получения истории сообщений: {e}")
         return []
-
 def get_all_users():
     try:
         with psycopg.connect(DATABASE_URL) as conn:
@@ -227,7 +218,6 @@ def get_all_users():
     except Exception as e:
         logger.error(f"❌ Ошибка получения пользователей: {e}")
         return []
-
 def get_total_users_count():
     try:
         with psycopg.connect(DATABASE_URL) as conn:
@@ -237,7 +227,6 @@ def get_total_users_count():
     except Exception as e:
         logger.error(f"❌ Ошибка получения количества пользователей: {e}")
         return 0
-
 def clear_all_active_conversations():
     try:
         with psycopg.connect(DATABASE_URL) as conn:
@@ -248,10 +237,8 @@ def clear_all_active_conversations():
     except Exception as e:
         logger.error(f"❌ Ошибка очистки активных диалогов: {e}")
         return 0
-
 init_db()
 threading.Thread(target=buffer_flush_thread, daemon=True).start()
-
 def load_stats():
     if os.path.exists(STATS_FILE):
         try:
@@ -261,7 +248,6 @@ def load_stats():
             logger.error(f"Ошибка загрузки статистики: {e}")
             return default_stats()
     return default_stats()
-
 def default_stats():
     return {
         'total_users': 0,
@@ -271,7 +257,6 @@ def default_stats():
         'first_start': datetime.now().isoformat(),
         'last_save': datetime.now().isoformat()
     }
-
 def save_stats():
     try:
         bot_statistics['last_save'] = datetime.now().isoformat()
@@ -279,14 +264,12 @@ def save_stats():
             json.dump(bot_statistics, f, indent=2)
     except Exception as e:
         logger.error(f"Ошибка сохранения статистики: {e}")
-
 bot_statistics = load_stats()
 active_conversations = {}
 owner_client_map = {}
 telegram_app = None
 flask_app = Flask(__name__)
 CORS(flask_app)
-
 class TelegramBot:
     def __init__(self):
         self.application = Application.builder().token(BOT_TOKEN).build()
@@ -295,12 +278,11 @@ class TelegramBot:
         self.initialized = False
         self.polling_task = None
         self.loop = None
-
     async def set_commands_menu(self):
         commands = [
             ("start", "Головне меню"),
             ("help", "Допомога та інформація"),
-            ("order", "Зробити замовлення"),
+            ("pay", "Оплатити замовлення (з сайту або файлу)"), # Обновлена команда
             ("question", "Поставити запитання"),
             ("channel", "Наш головний канал"),
             ("stop", "Завершити поточний діалог")
@@ -318,25 +300,24 @@ class TelegramBot:
                 await self.application.bot.set_my_commands(owner_commands, scope=BotCommandScopeChat(owner_id))
         except Exception as e:
             logger.error(f"Ошибка установки команд: {e}")
-
     def setup_handlers(self):
         self.application.add_handler(CommandHandler("start", self.start))
         self.application.add_handler(CommandHandler("stop", self.stop_conversation))
         self.application.add_handler(CommandHandler("stats", self.show_stats))
         self.application.add_handler(CommandHandler("help", self.show_help))
         self.application.add_handler(CommandHandler("channel", self.channel_command))
-        self.application.add_handler(CommandHandler("order", self.order_command))
+        # Удалена команда /order
+        # self.application.add_handler(CommandHandler("order", self.order_command))
         self.application.add_handler(CommandHandler("question", self.question_command))
         self.application.add_handler(CommandHandler("chats", self.show_active_chats))
         self.application.add_handler(CommandHandler("history", self.show_conversation_history))
         self.application.add_handler(CommandHandler("dialog", self.start_dialog_command))
-        self.application.add_handler(CommandHandler("pay", self.pay_command))
+        self.application.add_handler(CommandHandler("pay", self.pay_command)) # Оставлено
         self.application.add_handler(CommandHandler("clear", self.clear_active_conversations_command))
         self.application.add_handler(CallbackQueryHandler(self.button_handler))
         self.application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, self.handle_message))
-        self.application.add_handler(MessageHandler(filters.Document.ALL, self.handle_document))
+        self.application.add_handler(MessageHandler(filters.Document.ALL, self.handle_document)) # Оставлено
         self.application.add_error_handler(self.error_handler)
-
     async def initialize(self):
         try:
             await self.application.initialize()
@@ -345,7 +326,6 @@ class TelegramBot:
         except Exception as e:
             logger.error(f"❌ Ошибка инициализации Telegram Application: {e}")
             raise
-
     async def start_polling(self):
         try:
             if self.application.updater.running:
@@ -362,7 +342,6 @@ class TelegramBot:
         except Exception as e:
             logger.error(f"❌ Ошибка запуска polling: {e}")
             raise
-
     async def stop_polling(self):
         try:
             if self.application.updater and self.application.updater.running:
@@ -373,7 +352,6 @@ class TelegramBot:
                 await self.application.shutdown()
         except Exception as e:
             logger.error(f"❌ Ошибка остановки polling: {e}")
-
     async def start(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         user = update.effective_user
         ensure_user_exists(user)
@@ -381,14 +359,13 @@ class TelegramBot:
             await update.message.reply_text(f"Добро пожаловать, {user.first_name}! Вы вошли как основатель магазина.")
             return
         keyboard = [
-            [InlineKeyboardButton("🛒 Зробити замовлення", callback_data='order')],
+            [InlineKeyboardButton("🛒 Зробити замовлення", url=MINI_APP_URL)], # <<< Ссылка на мини-приложение
             [InlineKeyboardButton("❓ Поставити запитання", callback_data='question')],
             [InlineKeyboardButton("ℹ️ Допомога", callback_data='help')]
         ]
         reply_markup = InlineKeyboardMarkup(keyboard)
         welcome_message = f"Ласкаво просимо, {user.first_name}! 👋\nЯ бот-помічник нашого магазину. Будь ласка, оберіть, що вас цікавить:"
         await update.message.reply_text(welcome_message.strip(), reply_markup=reply_markup)
-
     async def pay_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         user = update.effective_user
         user_id = user.id
@@ -446,10 +423,9 @@ class TelegramBot:
         ]
         reply_markup = InlineKeyboardMarkup(keyboard)
         await update.message.reply_text(
-            f"{order_text}\n\nОберіть спосіб оплати:",
+            f"{order_text}\nОберіть спосіб оплати:",
             reply_markup=reply_markup
         )
-
     async def handle_document(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         user = update.effective_user
         document = update.message.document
@@ -492,10 +468,9 @@ class TelegramBot:
         ]
         reply_markup = InlineKeyboardMarkup(keyboard)
         await update.message.reply_text(
-            f"{order_text}\n\nОберіть спосіб оплати:",
+            f"{order_text}\nОберіть спосіб оплати:",
             reply_markup=reply_markup
         )
-
     async def show_help(self, update: Update, context: ContextTypes.DEFAULT_TYPE = None):
         if isinstance(update, Update):
             message = update.message
@@ -506,7 +481,7 @@ class TelegramBot:
 🔐 Наш сервіс купує підписки на ваш готовий акаунт, а не дає вам свій. Ми дуже стараємось бути з клієнтами, тому відповіді на будь-які питання по нашому сервісу можна задавати цілодобово.
 📌 Список доступних команд:
 /start - Головне меню
-/order - Зробити замовлення
+/pay - Оплатити замовлення (з сайту або файлу)
 /question - Поставити запитання
 /channel - Наш канал з асортиментом, оновленнями та розіграшами
 /stop - Завершити поточний діалог
@@ -514,7 +489,6 @@ class TelegramBot:
 💬 Якщо у вас виникли питання, не соромтеся звертатися!
         """
         await message.reply_text(help_text.strip())
-
     async def channel_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         keyboard = [[InlineKeyboardButton("📢 Перейти в SecureShopUA", url="https://t.me/SecureShopUA")]]
         reply_markup = InlineKeyboardMarkup(keyboard)
@@ -528,15 +502,14 @@ class TelegramBot:
 Приєднуйтесь, щоб бути в курсі всіх новин! 👇
         """
         await update.message.reply_text(message_text.strip(), reply_markup=reply_markup)
-
-    async def order_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        keyboard = [
-            [InlineKeyboardButton("💳 Підписки", callback_data='order_subscriptions')],
-            [InlineKeyboardButton("🎮 Цифрові товари", callback_data='order_digital')],
-            [InlineKeyboardButton("⬅️ Назад", callback_data='back_to_main')]
-        ]
-        await update.message.reply_text("📦 Оберіть тип товару:", reply_markup=InlineKeyboardMarkup(keyboard))
-
+    # Удалена команда /order
+    # async def order_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+    #     keyboard = [
+    #         [InlineKeyboardButton("💳 Підписки", callback_data='order_subscriptions')],
+    #         [InlineKeyboardButton("🎮 Цифрові товари", callback_data='order_digital')],
+    #         [InlineKeyboardButton("⬅️ Назад", callback_data='back_to_main')]
+    #     ]
+    #     await update.message.reply_text("📦 Оберіть тип товару:", reply_markup=InlineKeyboardMarkup(keyboard))
     async def question_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         user = update.effective_user
         user_id = user.id
@@ -561,7 +534,6 @@ class TelegramBot:
             "📝 Напишіть ваше запитання. Я передам його засновнику магазину.\n"
             "Щоб завершити цей діалог пізніше, використайте команду /stop."
         )
-
     async def stop_conversation(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         user = update.effective_user
         user_id = user.id
@@ -616,7 +588,6 @@ class TelegramBot:
             "ℹ️ У вас немає активного діалогу для завершення.\n"
             "Щоб розпочати новий діалог, використовуйте /start."
         )
-
     async def clear_active_conversations_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         owner_id = update.effective_user.id
         if owner_id not in [OWNER_ID_1, OWNER_ID_2]:
@@ -626,7 +597,6 @@ class TelegramBot:
         active_conversations.clear()
         owner_client_map.clear()
         await update.message.reply_text(f"✅ Усі активні діалоги очищено з бази даних. Видалено записів: {deleted_count}")
-
     async def show_stats(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         owner_id = update.effective_user.id
         if owner_id not in [OWNER_ID_1, OWNER_ID_2]:
@@ -669,7 +639,6 @@ class TelegramBot:
             )
         else:
             await update.message.reply_text("ℹ️ В базе данных нет пользователей для экспорта.")
-
     async def show_active_chats(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         owner_id = update.effective_user.id
         if owner_id not in [OWNER_ID_1, OWNER_ID_2]:
@@ -679,7 +648,7 @@ class TelegramBot:
             with psycopg.connect(DATABASE_URL) as conn:
                 with conn.cursor(row_factory=dict_row) as cur:
                     cur.execute("""
-                        SELECT ac.*, u.first_name, u.username 
+                        SELECT ac.*, u.first_name, u.username
                         FROM active_conversations ac
                         JOIN users u ON ac.user_id = u.id
                         ORDER BY ac.updated_at DESC
@@ -722,7 +691,6 @@ class TelegramBot:
         except Exception as e:
             logger.error(f"❌ Ошибка получения активных чатов: {e}")
             await update.message.reply_text("❌ Произошла ошибка при получении активных чатов.")
-
     async def show_conversation_history(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         owner_id = update.effective_user.id
         if owner_id not in [OWNER_ID_1, OWNER_ID_2]:
@@ -762,7 +730,6 @@ class TelegramBot:
         except Exception as e:
             logger.error(f"❌ Ошибка получения истории сообщений: {e}")
             await update.message.reply_text("❌ Произошла ошибка при получении истории.")
-
     async def start_dialog_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         owner_id = update.effective_user.id
         if owner_id not in [OWNER_ID_1, OWNER_ID_2]:
@@ -806,9 +773,9 @@ class TelegramBot:
         else:
             active_conversations[client_id]['assigned_owner'] = owner_id
             save_active_conversation(
-                client_id, 
-                active_conversations[client_id]['type'], 
-                owner_id, 
+                client_id,
+                active_conversations[client_id]['type'],
+                owner_id,
                 active_conversations[client_id]['last_message']
             )
         owner_client_map[owner_id] = client_id
@@ -829,258 +796,45 @@ class TelegramBot:
             "💬 Теперь вы можете писать сообщения, и они будут отправлены этому пользователю.\n"
             "Для завершения диалога используйте /stop."
         )
-
     async def button_handler(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         query = update.callback_query
         await query.answer()
         user = query.from_user
         user_id = user.id
         ensure_user_exists(user)
-        if query.data == 'order':
-            keyboard = [
-                [InlineKeyboardButton("💳 Підписки", callback_data='order_subscriptions')],
-                [InlineKeyboardButton("🎮 Цифрові товари", callback_data='order_digital')],
-                [InlineKeyboardButton("⬅️ Назад", callback_data='back_to_main')]
-            ]
-            await query.edit_message_text("📦 Оберіть тип товару:", reply_markup=InlineKeyboardMarkup(keyboard))
-        elif query.data == 'back_to_main':
-            keyboard = [
-                [InlineKeyboardButton("🛒 Зробити замовлення", callback_data='order')],
-                [InlineKeyboardButton("❓ Поставити запитання", callback_data='question')],
-                [InlineKeyboardButton("ℹ️ Допомога", callback_data='help')]
-            ]
-            await query.edit_message_text("Головне меню:", reply_markup=InlineKeyboardMarkup(keyboard))
+        # Удалены все обработчики кнопок, связанные с выбором товаров
+        if query.data == 'back_to_main':
+             keyboard = [
+                 [InlineKeyboardButton("🛒 Зробити замовлення", url=MINI_APP_URL)], # <<< Ссылка на мини-приложение
+                 [InlineKeyboardButton("❓ Поставити запитання", callback_data='question')],
+                 [InlineKeyboardButton("ℹ️ Допомога", callback_data='help')]
+             ]
+             await query.edit_message_text("Головне меню:", reply_markup=InlineKeyboardMarkup(keyboard))
         elif query.data == 'help':
             await self.show_help(query.message)
-        elif query.data == 'order_subscriptions':
-            keyboard = [
-                [InlineKeyboardButton("💬 ChatGPT", callback_data='category_chatgpt')],
-                [InlineKeyboardButton("🎮 Discord", callback_data='category_discord')],
-                [InlineKeyboardButton("📚 Duolingo", callback_data='category_duolingo')],
-                [InlineKeyboardButton("📸 PicsArt", callback_data='category_picsart')],
-                [InlineKeyboardButton("🎨 Canva", callback_data='category_canva')],
-                [InlineKeyboardButton("📺 Netflix", callback_data='category_netflix')],
-                [InlineKeyboardButton("⬅️ Назад", callback_data='order')]
-            ]
-            await query.edit_message_text("💳 Оберіть категорію підписки:", reply_markup=InlineKeyboardMarkup(keyboard))
-        elif query.data == 'order_digital':
-            keyboard = [
-                [InlineKeyboardButton("🎮 Discord Прикраси", callback_data='category_discord_decor')],
-                [InlineKeyboardButton("⬅️ Назад", callback_data='order')]
-            ]
-            await query.edit_message_text("🎮 Оберіть цифровий товар:", reply_markup=InlineKeyboardMarkup(keyboard))
-        elif query.data == 'category_chatgpt':
-            keyboard = [
-                [InlineKeyboardButton("1 місяць - 650 UAH", callback_data='chatgpt_1')],
-                [InlineKeyboardButton("⬅️ Назад", callback_data='order_subscriptions')]
-            ]
-            await query.edit_message_text("💬 Оберіть варіант ChatGPT Plus:", reply_markup=InlineKeyboardMarkup(keyboard))
-        elif query.data == 'category_discord':
-            keyboard = [
-                [InlineKeyboardButton("Nitro Basic", callback_data='discord_basic')],
-                [InlineKeyboardButton("Nitro Full", callback_data='discord_full')],
-                [InlineKeyboardButton("⬅️ Назад", callback_data='order_subscriptions')]
-            ]
-            await query.edit_message_text("🎮 Оберіть тип Discord Nitro:", reply_markup=InlineKeyboardMarkup(keyboard))
-        elif query.data == 'discord_basic':
-            keyboard = [
-                [InlineKeyboardButton("1 місяць - 100 UAH", callback_data='discord_basic_1')],
-                [InlineKeyboardButton("12 місяців - 900 UAH", callback_data='discord_basic_12')],
-                [InlineKeyboardButton("⬅️ Назад", callback_data='category_discord')]
-            ]
-            await query.edit_message_text("🔹 Discord Nitro Basic:", reply_markup=InlineKeyboardMarkup(keyboard))
-        elif query.data == 'discord_full':
-            keyboard = [
-                [InlineKeyboardButton("1 місяць - 170 UAH", callback_data='discord_full_1')],
-                [InlineKeyboardButton("12 місяців - 1700 UAH", callback_data='discord_full_12')],
-                [InlineKeyboardButton("⬅️ Назад", callback_data='category_discord')]
-            ]
-            await query.edit_message_text("✨ Discord Nitro Full:", reply_markup=InlineKeyboardMarkup(keyboard))
-        elif query.data == 'category_duolingo':
-            keyboard = [
-                [InlineKeyboardButton("👨‍👩‍👧‍👦 Family", callback_data='duolingo_family')],
-                [InlineKeyboardButton("👤 Individual", callback_data='duolingo_individual')],
-                [InlineKeyboardButton("⬅️ Назад", callback_data='order_subscriptions')]
-            ]
-            await query.edit_message_text("📚 Оберіть тип підписки Duolingo:", reply_markup=InlineKeyboardMarkup(keyboard))
-        elif query.data == 'duolingo_family':
-            keyboard = [
-                [InlineKeyboardButton("12 місяців - 380 UAH (на 1 людину)", callback_data='duolingo_fam_12')],
-                [InlineKeyboardButton("⬅️ Назад", callback_data='category_duolingo')]
-            ]
-            await query.edit_message_text("👨‍👩‍👧‍👦 Duolingo Family:", reply_markup=InlineKeyboardMarkup(keyboard))
-        elif query.data == 'duolingo_individual':
-            keyboard = [
-                [InlineKeyboardButton("1 місяць - 200 UAH", callback_data='duolingo_ind_1')],
-                [InlineKeyboardButton("12 місяців - 1500 UAH", callback_data='duolingo_ind_12')],
-                [InlineKeyboardButton("⬅️ Назад", callback_data='category_duolingo')]
-            ]
-            await query.edit_message_text("👤 Duolingo Individual:", reply_markup=InlineKeyboardMarkup(keyboard))
-        elif query.data == 'category_picsart':
-            keyboard = [
-                [InlineKeyboardButton("✨ PicsArt Plus", callback_data='picsart_plus')],
-                [InlineKeyboardButton("🚀 PicsArt Pro", callback_data='picsart_pro')],
-                [InlineKeyboardButton("⬅️ Назад", callback_data='order_subscriptions')]
-            ]
-            await query.edit_message_text("📸 Оберіть версію PicsArt:", reply_markup=InlineKeyboardMarkup(keyboard))
-        elif query.data == 'picsart_plus':
-            keyboard = [
-                [InlineKeyboardButton("1 місяць - 130 UAH", callback_data='picsart_plus_1')],
-                [InlineKeyboardButton("12 місяців - 800 UAH", callback_data='picsart_plus_12')],
-                [InlineKeyboardButton("⬅️ Назад", callback_data='category_picsart')]
-            ]
-            await query.edit_message_text("✨ PicsArt Plus:", reply_markup=InlineKeyboardMarkup(keyboard))
-        elif query.data == 'picsart_pro':
-            keyboard = [
-                [InlineKeyboardButton("1 місяць - 180 UAH", callback_data='picsart_pro_1')],
-                [InlineKeyboardButton("12 місяців - 1000 UAH", callback_data='picsart_pro_12')],
-                [InlineKeyboardButton("⬅️ Назад", callback_data='category_picsart')]
-            ]
-            await query.edit_message_text("🚀 PicsArt Pro:", reply_markup=InlineKeyboardMarkup(keyboard))
-        elif query.data == 'category_canva':
-            keyboard = [
-                [InlineKeyboardButton("👤 Individual", callback_data='canva_individual')],
-                [InlineKeyboardButton("👨‍👩‍👧‍👦 Family", callback_data='canva_family')],
-                [InlineKeyboardButton("⬅️ Назад", callback_data='order_subscriptions')]
-            ]
-            await query.edit_message_text("🎨 Оберіть тариф Canva:", reply_markup=InlineKeyboardMarkup(keyboard))
-        elif query.data == 'canva_individual':
-            keyboard = [
-                [InlineKeyboardButton("1 місяць - 350 UAH", callback_data='canva_ind_1')],
-                [InlineKeyboardButton("12 місяців - 3000 UAH", callback_data='canva_ind_12')],
-                [InlineKeyboardButton("⬅️ Назад", callback_data='category_canva')]
-            ]
-            await query.edit_message_text("👤 Canva Individual:", reply_markup=InlineKeyboardMarkup(keyboard))
-        elif query.data == 'canva_family':
-            keyboard = [
-                [InlineKeyboardButton("1 місяць - 850 UAH", callback_data='canva_fam_1')],
-                [InlineKeyboardButton("12 місяців - 7500 UAH", callback_data='canva_fam_12')],
-                [InlineKeyboardButton("⬅️ Назад", callback_data='category_canva')]
-            ]
-            await query.edit_message_text("👨‍👩‍👧‍👦 Canva Family:", reply_markup=InlineKeyboardMarkup(keyboard))
-        elif query.data == 'category_netflix':
-            keyboard = [
-                [InlineKeyboardButton("1 місяць - 350 UAH", callback_data='netflix_1')],
-                [InlineKeyboardButton("⬅️ Назад", callback_data='order_subscriptions')]
-            ]
-            await query.edit_message_text("📺 Оберіть варіант Netflix:", reply_markup=InlineKeyboardMarkup(keyboard))
-        elif query.data == 'category_discord_decor':
-            keyboard = [
-                [InlineKeyboardButton("Без Nitro", callback_data='discord_decor_without_nitro')],
-                [InlineKeyboardButton("З Nitro", callback_data='discord_decor_with_nitro')],
-                [InlineKeyboardButton("⬅️ Назад", callback_data='order_digital')]
-            ]
-            await query.edit_message_text("🎮 Оберіть тип прикраси Discord:", reply_markup=InlineKeyboardMarkup(keyboard))
-        elif query.data == 'discord_decor_without_nitro':
-            keyboard = [
-                [InlineKeyboardButton("6$ - 180 UAH", callback_data='discord_decor_bzn_6')],
-                [InlineKeyboardButton("8$ - 235 UAH", callback_data='discord_decor_bzn_8')],
-                [InlineKeyboardButton("10$ - 295 UAH", callback_data='discord_decor_bzn_10')],
-                [InlineKeyboardButton("11$ - 325 UAH", callback_data='discord_decor_bzn_11')],
-                [InlineKeyboardButton("12$ - 355 UAH", callback_data='discord_decor_bzn_12')],
-                [InlineKeyboardButton("13$ - 385 UAH", callback_data='discord_decor_bzn_13')],
-                [InlineKeyboardButton("15$ - 440 UAH", callback_data='discord_decor_bzn_15')],
-                [InlineKeyboardButton("16$ - 470 UAH", callback_data='discord_decor_bzn_16')],
-                [InlineKeyboardButton("18$ - 530 UAH", callback_data='discord_decor_bzn_18')],
-                [InlineKeyboardButton("24$ - 705 UAH", callback_data='discord_decor_bzn_24')],
-                [InlineKeyboardButton("29$ - 855 UAH", callback_data='discord_decor_bzn_29')],
-                [InlineKeyboardButton("⬅️ Назад", callback_data='category_discord_decor')]
-            ]
-            await query.edit_message_text("🎮 Discord Прикраси (Без Nitro):", reply_markup=InlineKeyboardMarkup(keyboard))
-        elif query.data == 'discord_decor_with_nitro':
-            keyboard = [
-                [InlineKeyboardButton("5$ - 145 UAH", callback_data='discord_decor_zn_5')],
-                [InlineKeyboardButton("7$ - 205 UAH", callback_data='discord_decor_zn_7')],
-                [InlineKeyboardButton("8.5$ - 250 UAH", callback_data='discord_decor_zn_8_5')],
-                [InlineKeyboardButton("9$ - 265 UAH", callback_data='discord_decor_zn_9')],
-                [InlineKeyboardButton("14$ - 410 UAH", callback_data='discord_decor_zn_14')],
-                [InlineKeyboardButton("22$ - 650 UAH", callback_data='discord_decor_zn_22')],
-                [InlineKeyboardButton("⬅️ Назад", callback_data='category_discord_decor')]
-            ]
-            await query.edit_message_text("🎮 Discord Прикраси (З Nitro):", reply_markup=InlineKeyboardMarkup(keyboard))
-        elif query.data in [
-            'chatgpt_1',
-            'discord_basic_1', 'discord_basic_12',
-            'discord_full_1', 'discord_full_12',
-            'duolingo_ind_1', 'duolingo_ind_12', 'duolingo_fam_12',
-            'picsart_plus_1', 'picsart_plus_12',
-            'picsart_pro_1', 'picsart_pro_12',
-            'canva_ind_1', 'canva_ind_12',
-            'canva_fam_1', 'canva_fam_12',
-            'netflix_1'
-        ]:
-            context.user_data['selected_product'] = query.data
-            product_info = products.SUBSCRIPTION_PRODUCTS.get(query.data, {'name': "Невідомий товар", 'price': 0})
-            keyboard = [
-                [InlineKeyboardButton("✅ Замовити", callback_data='confirm_subscription_order')],
-                [InlineKeyboardButton("⬅️ Назад", callback_data=products.SUBSCRIPTION_BACK_MAP.get(query.data, 'order_subscriptions'))]
-            ]
-            await query.edit_message_text(
-                f"🛒 Ви обрали:\n{product_info['name']}\n💵 Ціна: {product_info['price']} UAH\n"
-                f"Натисніть \"✅ Замовити\" для підтвердження замовлення.",
-                reply_markup=InlineKeyboardMarkup(keyboard)
-            )
-        elif query.data in [
-            'discord_decor_bzn_6', 'discord_decor_bzn_8', 'discord_decor_bzn_10',
-            'discord_decor_bzn_11', 'discord_decor_bzn_12', 'discord_decor_bzn_13',
-            'discord_decor_bzn_15', 'discord_decor_bzn_16', 'discord_decor_bzn_18',
-            'discord_decor_bzn_24', 'discord_decor_bzn_29',
-            'discord_decor_zn_5', 'discord_decor_zn_7', 'discord_decor_zn_8_5',
-            'discord_decor_zn_9', 'discord_decor_zn_14', 'discord_decor_zn_22'
-        ]:
-            context.user_data['selected_product'] = query.data
-            product_info = products.DIGITAL_PRODUCTS.get(query.data, {'name': "Невідомий цифровий товар", 'price': 0})
-            keyboard = [
-                [InlineKeyboardButton("✅ Замовити", callback_data='confirm_digital_order')],
-                [InlineKeyboardButton("⬅️ Назад", callback_data=products.DIGITAL_BACK_MAP.get(query.data, 'category_discord_decor'))]
-            ]
-            await query.edit_message_text(
-                f"🎮 Ви обрали:\n{product_info['name']}\n💵 Ціна: {product_info['price']} UAH\n"
-                f"Натисніть \"✅ Замовити\" для підтвердження замовлення.",
-                reply_markup=InlineKeyboardMarkup(keyboard)
-            )
-        elif query.data == 'confirm_subscription_order':
-            selected_product = context.user_data.get('selected_product')
-            if not selected_product:
-                await query.edit_message_text("❌ Помилка: товар не обраний")
+        elif query.data == 'question':
+            if user_id in active_conversations:
+                await query.answer(
+                    "❗ У вас вже є активний діалог.\n"
+                    "Будь ласка, продовжуйте писати в поточному діалозі або завершіть його командою /stop, "
+                    "якщо хочете почати новий діалог.",
+                    show_alert=True
+                )
                 return
-            product_info = products.SUBSCRIPTION_PRODUCTS.get(selected_product, {'name': "Невідомий товар", 'price': 0})
-            order_text = f"🛍️ Хочу замовити: {product_info['name']} за {product_info['price']} UAH"
-            context.user_data['pending_payment'] = {
-                'product_id': selected_product,
-                'product_name': product_info['name'],
-                'price_uah': product_info['price'],
-                'type': 'subscription'
+            active_conversations[user_id] = {
+                'type': 'question',
+                'user_info': user,
+                'assigned_owner': None,
+                'last_message': "Нове запитання"
             }
-            keyboard = [
-                [InlineKeyboardButton("💳 Оплата по карті", callback_data=f'pay_card_{product_info["price"]}')],
-                [InlineKeyboardButton("₿ Оплата криптовалютою", callback_data=f'pay_crypto_{product_info["price"]}')]
-            ]
+            save_active_conversation(user_id, 'question', None, "Нове запитання")
+            bot_statistics['total_questions'] += 1
+            save_stats()
             await query.edit_message_text(
-                f"{order_text}\n\nОберіть спосіб оплати:",
-                reply_markup=InlineKeyboardMarkup(keyboard)
+                "📝 Напишіть ваше запитання. Я передам його засновнику магазину.\n"
+                "Щоб завершити цей діалог пізніше, використайте команду /stop."
             )
-        elif query.data == 'confirm_digital_order':
-            selected_product = context.user_data.get('selected_product')
-            if not selected_product:
-                await query.edit_message_text("❌ Помилка: товар не обраний")
-                return
-            product_info = products.DIGITAL_PRODUCTS.get(selected_product, {'name': "Невідомий цифровий товар", 'price': 0})
-            order_text = f"🎮 Хочу замовити: {product_info['name']} за {product_info['price']} UAH"
-            context.user_data['pending_payment'] = {
-                'product_id': selected_product,
-                'product_name': product_info['name'],
-                'price_uah': product_info['price'],
-                'type': 'digital'
-            }
-            keyboard = [
-                [InlineKeyboardButton("💳 Оплата по карті", callback_data=f'pay_card_{product_info["price"]}')],
-                [InlineKeyboardButton("₿ Оплата криптовалютою", callback_data=f'pay_crypto_{product_info["price"]}')]
-            ]
-            await query.edit_message_text(
-                f"{order_text}\n\nОберіть спосіб оплати:",
-                reply_markup=InlineKeyboardMarkup(keyboard)
-            )
+        # --- Остальная логика кнопок (оплата, диалоги, остановка) сохранена ---
         elif query.data.startswith('pay_card_'):
             try:
                 parts = query.data.split('_')
@@ -1094,7 +848,7 @@ class TelegramBot:
                 keyboard = [[InlineKeyboardButton("✅ Оплачено", callback_data='paid_card')]]
                 reply_markup = InlineKeyboardMarkup(keyboard)
                 await query.edit_message_text(
-                    f"💳 Оплата по карті:\n`{products.CARD_NUMBER}`\n\n"
+                    f"💳 Оплата по карті:\n`{products.CARD_NUMBER}`\n"
                     f"Після оплати, натисніть кнопку нижче.",
                     parse_mode='Markdown',
                     reply_markup=reply_markup
@@ -1152,7 +906,7 @@ class TelegramBot:
                     keyboard = [[InlineKeyboardButton("✅ Оплачено", callback_data='paid_crypto_invoice')]]
                     reply_markup = InlineKeyboardMarkup(keyboard)
                     await query.edit_message_text(
-                        f"🔗 Посилання для оплати {amount} UAH в {currency_name}:\n{pay_url}\n\n"
+                        f"🔗 Посилання для оплати {amount} UAH в {currency_name}:\n{pay_url}\n"
                         f"Після оплати, натисніть кнопку нижче.",
                         reply_markup=reply_markup
                     )
@@ -1186,13 +940,13 @@ class TelegramBot:
                  if 'product_id' in pending_payment:
                      order_text = f"🛍️ Хочу замовити: {pending_payment['product_name']} за {pending_payment['price_uah']} UAH"
                      await query.edit_message_text(
-                         f"❌ Оплата скасована.\n{order_text}\n\nВи можете зробити нове замовлення через /start."
+                         f"❌ Оплата скасована.\n{order_text}\nВи можете зробити нове замовлення через /start."
                      )
                      await self.forward_order_to_owners(context, user_id, user, f"❌ Клієнт скасував оплату:\n{order_text}")
                  elif 'order_id' in pending_payment:
                      total_uah = pending_payment['total_uah']
                      await query.edit_message_text(
-                         f"❌ Оплата скасована.\nЗагальна сума: {total_uah} UAH\n\nВи можете зробити нове замовлення через /start."
+                         f"❌ Оплата скасована.\nЗагальна сума: {total_uah} UAH\nВи можете зробити нове замовлення через /start."
                      )
                      order_summary = "🛍️ Замовлення з сайту (скасовано):\n"
                      for item in pending_payment.get('items', []):
@@ -1204,28 +958,6 @@ class TelegramBot:
                  context.user_data.pop('pending_payment', None)
              else:
                  await query.edit_message_text("❌ Оплата скасована.")
-        elif query.data == 'question':
-            if user_id in active_conversations:
-                await query.answer(
-                    "❗ У вас вже є активний діалог.\n"
-                    "Будь ласка, продовжуйте писати в поточному діалозі або завершіть його командою /stop, "
-                    "якщо хочете почати новий діалог.",
-                    show_alert=True
-                )
-                return
-            active_conversations[user_id] = {
-                'type': 'question',
-                'user_info': user,
-                'assigned_owner': None,
-                'last_message': "Нове запитання"
-            }
-            save_active_conversation(user_id, 'question', None, "Нове запитання")
-            bot_statistics['total_questions'] += 1
-            save_stats()
-            await query.edit_message_text(
-                "📝 Напишіть ваше запитання. Я передам його засновнику магазину.\n"
-                "Щоб завершити цей діалог пізніше, використайте команду /stop."
-            )
         elif query.data.startswith('take_order_'):
             client_id = int(query.data.split('_')[2])
             owner_id = user_id
@@ -1235,9 +967,9 @@ class TelegramBot:
             active_conversations[client_id]['assigned_owner'] = owner_id
             owner_client_map[owner_id] = client_id
             save_active_conversation(
-                client_id, 
-                active_conversations[client_id]['type'], 
-                owner_id, 
+                client_id,
+                active_conversations[client_id]['type'],
+                owner_id,
                 active_conversations[client_id]['last_message']
             )
             client_info = active_conversations[client_id]['user_info']
@@ -1274,9 +1006,9 @@ class TelegramBot:
                 if current_owner in owner_client_map:
                     del owner_client_map[current_owner]
                 save_active_conversation(
-                    client_id, 
-                    active_conversations[client_id]['type'], 
-                    other_owner, 
+                    client_id,
+                    active_conversations[client_id]['type'],
+                    other_owner,
                     active_conversations[client_id]['last_message']
                 )
                 client_info = active_conversations[client_id]['user_info']
@@ -1310,9 +1042,9 @@ class TelegramBot:
             active_conversations[client_id]['assigned_owner'] = owner_id
             owner_client_map[owner_id] = client_id
             save_active_conversation(
-                client_id, 
-                active_conversations[client_id]['type'], 
-                owner_id, 
+                client_id,
+                active_conversations[client_id]['type'],
+                owner_id,
                 active_conversations[client_id]['last_message']
             )
             history = get_conversation_history(client_id)
@@ -1337,7 +1069,6 @@ class TelegramBot:
                      "Напишите ответ:"
             )
             await query.edit_message_text(f"✅ Вы продолжили диалог с клиентом ID: {client_id}.")
-
     def _save_order_and_notify_owners(self, context, user_id, user, pending_payment):
         if 'product_id' in pending_payment:
             order_text = f"🛍️ Хочу замовити: {pending_payment['product_name']} за {pending_payment['price_uah']} UAH"
@@ -1379,7 +1110,6 @@ class TelegramBot:
                  self.application.create_task(self.forward_order_to_owners(context, user_id, user, order_summary))
             else:
                  asyncio.create_task(self.forward_order_to_owners(context, user_id, user, order_summary))
-
     async def handle_message(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         user = update.effective_user
         user_id = user.id
@@ -1389,7 +1119,7 @@ class TelegramBot:
             return
         if user_id not in active_conversations:
             keyboard = [
-                [InlineKeyboardButton("🛒 Зробити замовлення", callback_data='order')],
+                [InlineKeyboardButton("🛒 Зробити замовлення", url=MINI_APP_URL)], # <<< Ссылка на мини-приложение
                 [InlineKeyboardButton("❓ Поставити запитання", callback_data='question')],
                 [InlineKeyboardButton("ℹ️ Допомога", callback_data='help')]
             ]
@@ -1403,13 +1133,12 @@ class TelegramBot:
         active_conversations[user_id]['last_message'] = message_text
         save_message(user_id, message_text, True)
         save_active_conversation(
-            user_id, 
-            active_conversations[user_id]['type'], 
-            active_conversations[user_id].get('assigned_owner'), 
+            user_id,
+            active_conversations[user_id]['type'],
+            active_conversations[user_id].get('assigned_owner'),
             message_text
         )
         await self.forward_to_owner(update, context)
-
     async def forward_to_owner(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         user_id = update.effective_user.id
         if user_id not in active_conversations:
@@ -1420,22 +1149,21 @@ class TelegramBot:
         assigned_owner = active_conversations[user_id].get('assigned_owner')
         if not assigned_owner:
             await self.forward_to_both_owners(
-                context, 
-                user_id, 
-                user_info, 
-                conversation_type, 
+                context,
+                user_id,
+                user_info,
+                conversation_type,
                 update.message.text
             )
             return
         await self.forward_to_specific_owner(
-            context, 
-            user_id, 
-            user_info, 
-            conversation_type, 
-            update.message.text, 
+            context,
+            user_id,
+            user_info,
+            conversation_type,
+            update.message.text,
             assigned_owner
         )
-
     async def forward_to_both_owners(self, context, client_id, client_info, conversation_type, message_text):
         type_emoji = "🛒" if conversation_type in ['subscription_order', 'digital_order'] else "❓"
         type_text_map = {
@@ -1473,7 +1201,6 @@ class TelegramBot:
             text="✅ Ваше повідомлення передано засновникам магазину. "
                  "Очікуйте на відповідь найближчим часом."
         )
-
     async def forward_to_specific_owner(self, context, client_id, client_info, conversation_type, message_text, owner_id):
         type_emoji = "🛒" if conversation_type in ['subscription_order', 'digital_order'] else "❓"
         type_text_map = {
@@ -1517,13 +1244,12 @@ class TelegramBot:
             active_conversations[client_id]['assigned_owner'] = other_owner
             owner_client_map[other_owner] = client_id
             save_active_conversation(
-                client_id, 
-                conversation_type, 
-                other_owner, 
+                client_id,
+                conversation_type,
+                other_owner,
                 message_text
             )
             await self.forward_to_specific_owner(context, client_id, client_info, conversation_type, message_text, other_owner)
-
     async def forward_order_to_owners(self, context, client_id, client_info, order_text):
         conversation_type = 'digital_order' if 'Discord Прикраси' in order_text else 'subscription_order'
         active_conversations[client_id]['last_message'] = order_text
@@ -1558,7 +1284,6 @@ class TelegramBot:
                 )
             except Exception as e:
                 logger.error(f"  ❌ Ошибка отправки владельцу {owner_id}: {e}")
-
     async def handle_owner_message(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         owner = update.effective_user
         owner_id = owner.id
@@ -1581,9 +1306,9 @@ class TelegramBot:
             save_message(client_id, message_text, False)
             active_conversations[client_id]['last_message'] = message_text
             save_active_conversation(
-                client_id, 
-                active_conversations[client_id]['type'], 
-                owner_id, 
+                client_id,
+                active_conversations[client_id]['type'],
+                owner_id,
                 message_text
             )
             await context.bot.send_message(
@@ -1600,17 +1325,14 @@ class TelegramBot:
                 "❌ Помилка при надсиланні повідомлення клієнту. "
                 "Можливо, клієнт заблокував бота."
             )
-
     async def error_handler(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         logger.warning(f'Update {update} caused error {context.error}')
-
     def start_ping_service(self):
         if not self.ping_running:
             self.ping_running = True
             ping_thread = threading.Thread(target=self.ping_loop)
             ping_thread.daemon = True
             ping_thread.start()
-
     def ping_loop(self):
         import requests
         ping_url = f"{WEBHOOK_URL}/ping"
@@ -1626,9 +1348,8 @@ class TelegramBot:
             except Exception as e:
                 logger.error(f"❌ Неожиданная ошибка ping: {e}")
             time.sleep(PING_INTERVAL)
-
     def create_invoice(self, amount, pay_currency="usdtsol", currency="uah", order_id_suffix="unknown"):
-        api_key = products.NOWPAYMENTS_API_KEY 
+        api_key = products.NOWPAYMENTS_API_KEY
         if not api_key or api_key in ['YOUR_NOWPAYMENTS_API_KEY_HERE', '']:
             logger.error("NOWPAYMENTS_API_KEY не установлен!")
             return {"error": "API ключ не настроен"}
@@ -1652,9 +1373,7 @@ class TelegramBot:
         except Exception as e:
             logger.error(f"Неожиданная ошибка при создании инвойса: {e}")
             return {"error": f"Внутренняя ошибка: {e}"}
-
 bot_instance = TelegramBot()
-
 @flask_app.after_request
 def add_cors_headers(response):
     response.headers['Access-Control-Allow-Origin'] = '*'
@@ -1662,7 +1381,6 @@ def add_cors_headers(response):
     response.headers['Access-Control-Allow-Methods'] = 'GET, POST, PUT, DELETE, OPTIONS'
     response.headers['Access-Control-Allow-Credentials'] = 'true'
     return response
-
 @flask_app.route('/ping', methods=['GET'])
 def ping():
     return jsonify({
@@ -1673,7 +1391,6 @@ def ping():
         'bot_running': bot_running,
         'mode': 'polling' if USE_POLLING else 'webhook'
     }), 200
-
 @flask_app.route('/health', methods=['GET'])
 def health():
     return jsonify({
@@ -1688,7 +1405,6 @@ def health():
         'mode': 'polling' if USE_POLLING else 'webhook',
         'stats': bot_statistics
     }), 200
-
 @flask_app.route(f'/{BOT_TOKEN}', methods=['POST'])
 def webhook():
     if USE_POLLING:
@@ -1706,7 +1422,6 @@ def webhook():
     except Exception as e:
         logger.error(f"Ошибка обработки webhook: {e}")
         return jsonify({'error': str(e)}), 500
-
 @flask_app.route('/', methods=['GET'])
 def index():
     return jsonify({
@@ -1720,12 +1435,10 @@ def index():
         'bot_running': bot_running,
         'stats': bot_statistics
     }), 200
-
 def auto_save_loop():
     while True:
         time.sleep(300)
         save_stats()
-
 def main():
     if os.environ.get('RENDER'):
         time.sleep(10)
@@ -1744,7 +1457,6 @@ def main():
         use_reloader=False,
         threaded=True
     )
-
 async def setup_webhook():
     if USE_POLLING:
         try:
@@ -1759,7 +1471,6 @@ async def setup_webhook():
     except Exception as e:
         logger.error(f"❌ Ошибка установки webhook: {e}")
         return False
-
 async def start_bot():
     global telegram_app, bot_running
     with bot_lock:
@@ -1782,7 +1493,6 @@ async def start_bot():
             logger.error(f"❌ Ошибка запуска бота: {e}")
             bot_running = False
             raise
-
 def bot_thread():
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
@@ -1807,6 +1517,5 @@ def bot_thread():
             pass
         time.sleep(5)
         bot_thread()
-
 if __name__ == '__main__':
     main()
