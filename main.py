@@ -39,7 +39,7 @@ STATS_FILE = "bot_stats.json"
 BUFFER_FLUSH_INTERVAL = 300
 BUFFER_MAX_SIZE = 50
 # --- URL вашего мини-приложения ---
-MINI_APP_URL = os.getenv('MINI_APP_URL', 'https://your-mini-app-url.example.com') # <<< ЗАМЕНИТЕ НА РЕАЛЬНЫЙ URL
+MINI_APP_URL = os.getenv('MINI_APP_URL', 'https://secureshop-web-tau.vercel.app') # <<< ЗАМЕНИТЕ НА РЕАЛЬНЫЙ URL
 
 # --- БУФЕРЫ И КЭШИ ---
 message_buffer = []
