@@ -18,96 +18,77 @@ SUBSCRIPTION_PRODUCTS = {
     'canva_ind_12': {'name': "Canva Individual (12 місяців)", 'price': 3000},
     'canva_fam_1': {'name': "Canva Family (1 місяць)", 'price': 850},
     'canva_fam_12': {'name': "Canva Family (12 місяців)", 'price': 7500},
-    'netflix_1': {'name': "Netflix Premium (1 місяць)", 'price': 350}
+    'netflix_1': {'name': "Netflix Premium (1 місяць)", 'price': 350},
+    # Discord Украшення
+    'discord_decor_bzn_6': {'name': "Discord Украшення Без Nitro (6$)", 'price': 180},
+    'discord_decor_bzn_8': {'name': "Discord Украшення Без Nitro (8$)", 'price': 235},
+    'discord_decor_bzn_10': {'name': "Discord Украшення Без Nitro (10$)", 'price': 295},
+    'discord_decor_bzn_11': {'name': "Discord Украшення Без Nitro (11$)", 'price': 325},
+    'discord_decor_bzn_12': {'name': "Discord Украшення Без Nitro (12$)", 'price': 355},
+    'discord_decor_bzn_13': {'name': "Discord Украшення Без Nitro (13$)", 'price': 385},
+    'discord_decor_bzn_15': {'name': "Discord Украшення Без Nitro (15$)", 'price': 440},
+    'discord_decor_bzn_16': {'name': "Discord Украшення Без Nitro (16$)", 'price': 470},
+    'discord_decor_bzn_18': {'name': "Discord Украшення Без Nitro (18$)", 'price': 530},
+    'discord_decor_bzn_24': {'name': "Discord Украшення Без Nitro (24$)", 'price': 705},
+    'discord_decor_bzn_29': {'name': "Discord Украшення Без Nitro (29$)", 'price': 855},
+    'discord_decor_zn_5': {'name': "Discord Украшення З Nitro (5$)", 'price': 145},
+    'discord_decor_zn_7': {'name': "Discord Украшення З Nitro (7$)", 'price': 205},
+    'discord_decor_zn_8_5': {'name': "Discord Украшення З Nitro (8.5$)", 'price': 250},
+    'discord_decor_zn_9': {'name': "Discord Украшення З Nitro (9$)", 'price': 265},
+    'discord_decor_zn_14': {'name': "Discord Украшення З Nitro (14$)", 'price': 410},
+    'discord_decor_zn_22': {'name': "Discord Украшення З Nitro (22$)", 'price': 650},
 }
 
-# Словарь для цифровых товаров
+# --- НОВІ ЦИФРОВІ ТОВАРИ ---
 DIGITAL_PRODUCTS = {
-    'discord_decor_bzn_6': {'name': "Discord Прикраси (Без Nitro) 6$", 'price': 180},
-    'discord_decor_bzn_8': {'name': "Discord Прикраси (Без Nitro) 8$", 'price': 235},
-    'discord_decor_bzn_10': {'name': "Discord Прикраси (Без Nitro) 10$", 'price': 295},
-    'discord_decor_bzn_11': {'name': "Discord Прикраси (Без Nitro) 11$", 'price': 325},
-    'discord_decor_bzn_12': {'name': "Discord Прикраси (Без Nitro) 12$", 'price': 355},
-    'discord_decor_bzn_13': {'name': "Discord Прикраси (Без Nitro) 13$", 'price': 385},
-    'discord_decor_bzn_15': {'name': "Discord Прикраси (Без Nitro) 15$", 'price': 440},
-    'discord_decor_bzn_16': {'name': "Discord Прикраси (Без Nitro) 16$", 'price': 470},
-    'discord_decor_bzn_18': {'name': "Discord Прикраси (Без Nitro) 18$", 'price': 530},
-    'discord_decor_bzn_24': {'name': "Discord Прикраси (Без Nitro) 24$", 'price': 705},
-    'discord_decor_bzn_29': {'name': "Discord Прикраси (Без Nitro) 29$", 'price': 855},
-    'discord_decor_zn_5': {'name': "Discord Прикраси (З Nitro) 5$", 'price': 145},
-    'discord_decor_zn_7': {'name': "Discord Прикраси (З Nitro) 7$", 'price': 205},
-    'discord_decor_zn_8_5': {'name': "Discord Прикраси (З Nitro) 8.5$", 'price': 250},
-    'discord_decor_zn_9': {'name': "Discord Прикраси (З Nitro) 9$", 'price': 265},
-    'discord_decor_zn_14': {'name': "Discord Прикраси (З Nitro) 14$", 'price': 410},
-    'discord_decor_zn_22': {'name': "Discord Прикраси (З Nitro) 22$", 'price': 650},
+    # Roblox
+    'roblox_10': {'name': "Roblox Gift Card (10$)", 'price': 459},
+    'roblox_25': {'name': "Roblox Gift Card (25$)", 'price': 1149},
+    'roblox_50': {'name': "Roblox Gift Card (50$)", 'price': 2299},
+    # PSN TRY
+    'psn_tru_250': {'name': "PSN Gift Card (250 TRU)", 'price': 349},
+    'psn_tru_500': {'name': "PSN Gift Card (500 TRU)", 'price': 699},
+    'psn_tru_750': {'name': "PSN Gift Card (750 TRU)", 'price': 1049},
+    'psn_tru_1000': {'name': "PSN Gift Card (1000 TRU)", 'price': 1350},
+    'psn_tru_1500': {'name': "PSN Gift Card (1500 TRU)", 'price': 2000},
+    'psn_tru_2000': {'name': "PSN Gift Card (2000 TRU)", 'price': 2700},
+    'psn_tru_2500': {'name': "PSN Gift Card (2500 TRU)", 'price': 3400},
+    'psn_tru_3000': {'name': "PSN Gift Card (3000 TRU)", 'price': 4100},
+    'psn_tru_4000': {'name': "PSN Gift Card (4000 TRU)", 'price': 5300},
+    'psn_tru_5000': {'name': "PSN Gift Card (5000 TRU)", 'price': 6600},
+    # PSN INR
+    'psn_inr_1000': {'name': "PSN Gift Card (1000 INR)", 'price': 725},
+    'psn_inr_2000': {'name': "PSN Gift Card (2000 INR)", 'price': 1400},
+    'psn_inr_3000': {'name': "PSN Gift Card (3000 INR)", 'price': 2100},
+    'psn_inr_4000': {'name': "PSN Gift Card (4000 INR)", 'price': 2750},
+    'psn_inr_5000': {'name': "PSN Gift Card (5000 INR)", 'price': 3400},
 }
+# --- КІНЕЦЬ НОВИХ ЦИФРОВИХ ТОВАРІВ ---
 
-# Словарь для определения кнопки "Назад" для подписок
+# Объединяем все продукты для удобства поиска по ID из команды
+ALL_PRODUCTS = {**SUBSCRIPTION_PRODUCTS, **DIGITAL_PRODUCTS}
+
+# Словарь для навигации назад (пример, можно расширить)
 SUBSCRIPTION_BACK_MAP = {
-    'chatgpt_1': 'category_chatgpt',
-    'discord_basic_1': 'discord_basic',
-    'discord_basic_12': 'discord_basic',
-    'discord_full_1': 'discord_full',
-    'discord_full_12': 'discord_full',
-    'duolingo_ind_1': 'duolingo_individual',
-    'duolingo_ind_12': 'duolingo_individual',
-    'duolingo_fam_12': 'duolingo_family',
-    'picsart_plus_1': 'picsart_plus',
-    'picsart_plus_12': 'picsart_plus',
-    'picsart_pro_1': 'picsart_pro',
-    'picsart_pro_12': 'picsart_pro',
-    'canva_ind_1': 'canva_individual',
-    'canva_ind_12': 'canva_individual',
-    'canva_fam_1': 'canva_family',
-    'canva_fam_12': 'canva_family',
-    'netflix_1': 'category_netflix'
+    # ... (можна залишити як є або розширити)
 }
 
-# Словарь для определения кнопки "Назад" для цифровых товаров
-DIGITAL_BACK_MAP = {
-    'discord_decor_bzn_6': 'discord_decor_without_nitro',
-    'discord_decor_bzn_8': 'discord_decor_without_nitro',
-    'discord_decor_bzn_10': 'discord_decor_without_nitro',
-    'discord_decor_bzn_11': 'discord_decor_without_nitro',
-    'discord_decor_bzn_12': 'discord_decor_without_nitro',
-    'discord_decor_bzn_13': 'discord_decor_without_nitro',
-    'discord_decor_bzn_15': 'discord_decor_without_nitro',
-    'discord_decor_bzn_16': 'discord_decor_without_nitro',
-    'discord_decor_bzn_18': 'discord_decor_without_nitro',
-    'discord_decor_bzn_24': 'discord_decor_without_nitro',
-    'discord_decor_bzn_29': 'discord_decor_without_nitro',
-    'discord_decor_zn_5': 'discord_decor_with_nitro',
-    'discord_decor_zn_7': 'discord_decor_with_nitro',
-    'discord_decor_zn_8_5': 'discord_decor_with_nitro',
-    'discord_decor_zn_9': 'discord_decor_with_nitro',
-    'discord_decor_zn_14': 'discord_decor_with_nitro',
-    'discord_decor_zn_22': 'discord_decor_with_nitro',
-}
-
-# Словарь для сопоставления аббревиатур из команды /pay с полными названиями (сервисы)
-SERVICE_MAP = {
-    "Cha": "ChatGPT", "Dis": "Discord", "Duo": "Duolingo",
-    "Pic": "PicsArt", "Can": "Canva", "Net": "Netflix",
-    "DisU": "Discord Прикраси"
-}
-
-# Словарь для сопоставления аббревиатур из команды /pay с полными названиями (планы)
-PLAN_MAP = {
-    "Bas": "Basic", "Ful": "Full", "Ind": "Individual",
-    "Fam": "Family", "Plu": "Plus", "Pro": "Pro",
-    "Pre": "Premium", "BzN": "Без Nitro", "ZN": "З Nitro"
-}
-
-# Добавляем константы для оплаты из оплата.txt
-NOWPAYMENTS_API_KEY = "FTD5K08-DE94C4F-M9RB0XS-XSGBA26" # Лучше хранить в переменных окружения
+# Валюты для криптооплаты
 AVAILABLE_CURRENCIES = {
-    "USDT (Solana)": "usdtsol",
-    "USDT (TRC20)": "usdttrc20",
-    "ETH": "eth",
-    "USDT (Arbitrum)": "usdtarb",
-    "USDT (Polygon)": "usdtmatic",   # правильный код
-    "USDT (TON)": "usdtton",         # правильный код
-    "AVAX (C-Chain)": "avax",
-    "APTOS (APT)": "apt"
+    "Bitcoin (BTC)": "btc",
+    "Ethereum (ETH)": "eth",
+    "Tether (USDT)": "usdt",
+    "Litecoin (LTC)": "ltc",
+    "Bitcoin Cash (BCH)": "bch",
+    "TRON (TRX)": "trx",
+    "Dash (DASH)": "dash",
+    "USDC": "usdc",
+    "Dogecoin (DOGE)": "doge",
+    "Toncoin (TON)": "ton",
+    "Binance Coin (BNB)": "bnb",
+    "Solana (SOL)": "sol",
+    "XRP (XRP)": "xrp"
 }
-CARD_NUMBER = "5355 2800 4715 6045" # Лучше хранить в переменных окружения
+
+# API ключ для NOWPayments
+NOWPAYMENTS_API_KEY = "YOUR_NOWPAYMENTS_API_KEY_HERE" # Замініть на ваш справжній ключ
