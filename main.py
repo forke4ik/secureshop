@@ -15,13 +15,19 @@ import psycopg
 from psycopg.rows import dict_row
 import io
 import requests
-import products
+import products # Предполагается, что products.py содержит CARD_NUMBER, AVAILABLE_CURRENCIES, NOWPAYMENTS_API_KEY
+
+# --- НАСТРОЙКИ ЛОГИРОВАНИЯ ---
 logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO)
 logging.getLogger("httpx").setLevel(logging.WARNING)
 logger = logging.getLogger(__name__)
+
+# --- ГЛОБАЛЬНЫЕ ПЕРЕМЕННЫЕ ---
 bot_running = False
 bot_lock = threading.Lock()
-BOT_TOKEN = os.getenv('BOT_TOKEN', 'YOUR_BOT_TOKEN_HERE')
+
+# --- КОНФИГУРАЦИЯ ---
+BOT_TOKEN = os.getenv('BOT_TOKEN', 'YOUR_BOT_TOKEN_HERE') # <<< ЗАМЕНИТЕ НА РЕАЛЬНЫЙ ТОКЕН
 OWNER_ID_1 = int(os.getenv('OWNER_ID_1', '7106925462'))
 OWNER_ID_2 = int(os.getenv('OWNER_ID_2', '6279578957'))
 PORT = int(os.getenv('PORT', 10000))
@@ -32,13 +38,16 @@ DATABASE_URL = os.getenv('DATABASE_URL', 'postgresql://user:password@host:port/d
 STATS_FILE = "bot_stats.json"
 BUFFER_FLUSH_INTERVAL = 300
 BUFFER_MAX_SIZE = 50
+# --- URL вашего мини-приложения ---
+MINI_APP_URL = os.getenv('MINI_APP_URL', 'https://your-mini-app-url.example.com') # <<< ЗАМЕНИТЕ НА РЕАЛЬНЫЙ URL
+
+# --- БУФЕРЫ И КЭШИ ---
 message_buffer = []
 active_conv_buffer = []
 user_cache = set()
 history_cache = {}
-# --- URL вашего мини-приложения ---
-MINI_APP_URL = os.getenv('MINI_APP_URL', 'https://your-mini-app-url.example.com') # <<< ЗАМЕНИТЕ НА РЕАЛЬНЫЙ URL
 
+# --- ФУНКЦИИ РАБОТЫ С БАЗОЙ ДАННЫХ ---
 def flush_message_buffer():
     global message_buffer
     if not message_buffer:
@@ -64,6 +73,7 @@ def flush_message_buffer():
         logger.error(f"❌ Ошибка сброса буфера сообщений: {e}")
     finally:
         message_buffer = []
+
 def flush_active_conv_buffer():
     global active_conv_buffer
     if not active_conv_buffer:
@@ -101,11 +111,13 @@ def flush_active_conv_buffer():
         logger.error(f"❌ Ошибка сброса буфера диалогов: {e}")
     finally:
         active_conv_buffer = []
+
 def buffer_flush_thread():
     while True:
         time.sleep(BUFFER_FLUSH_INTERVAL)
         flush_message_buffer()
         flush_active_conv_buffer()
+
 def init_db():
     try:
         with psycopg.connect(DATABASE_URL) as conn:
@@ -145,6 +157,7 @@ def init_db():
                 cur.execute("CREATE INDEX IF NOT EXISTS idx_messages_created_at ON messages(created_at);")
     except Exception as e:
         logger.error(f"❌ Ошибка инициализации базы данных: {e}")
+
 def ensure_user_exists(user):
     if user.id in user_cache:
         return
@@ -165,11 +178,13 @@ def ensure_user_exists(user):
         user_cache.add(user.id)
     except Exception as e:
         logger.error(f"❌ Ошибка сохранения пользователя: {e}")
+
 def save_message(user_id, message_text, is_from_user):
     global message_buffer
     message_buffer.append((user_id, message_text, is_from_user))
     if len(message_buffer) >= BUFFER_MAX_SIZE:
         flush_message_buffer()
+
 def save_active_conversation(user_id, conversation_type, assigned_owner, last_message):
     global active_conv_buffer
     updated = False
@@ -182,6 +197,7 @@ def save_active_conversation(user_id, conversation_type, assigned_owner, last_me
         active_conv_buffer.append((user_id, conversation_type, assigned_owner, last_message))
     if len(active_conv_buffer) >= BUFFER_MAX_SIZE:
         flush_active_conv_buffer()
+
 def delete_active_conversation(user_id):
     try:
         with psycopg.connect(DATABASE_URL) as conn:
@@ -189,6 +205,7 @@ def delete_active_conversation(user_id):
                 cur.execute("DELETE FROM active_conversations WHERE user_id = %s", (user_id,))
     except Exception as e:
         logger.error(f"❌ Ошибка удаления активного диалога для {user_id}: {e}")
+
 def get_conversation_history(user_id, limit=50):
     flush_message_buffer()
     cache_key = f"{user_id}_{limit}"
@@ -209,6 +226,7 @@ def get_conversation_history(user_id, limit=50):
     except Exception as e:
         logger.error(f"❌ Ошибка получения истории сообщений: {e}")
         return []
+
 def get_all_users():
     try:
         with psycopg.connect(DATABASE_URL) as conn:
@@ -218,6 +236,7 @@ def get_all_users():
     except Exception as e:
         logger.error(f"❌ Ошибка получения пользователей: {e}")
         return []
+
 def get_total_users_count():
     try:
         with psycopg.connect(DATABASE_URL) as conn:
@@ -227,6 +246,7 @@ def get_total_users_count():
     except Exception as e:
         logger.error(f"❌ Ошибка получения количества пользователей: {e}")
         return 0
+
 def clear_all_active_conversations():
     try:
         with psycopg.connect(DATABASE_URL) as conn:
@@ -237,8 +257,11 @@ def clear_all_active_conversations():
     except Exception as e:
         logger.error(f"❌ Ошибка очистки активных диалогов: {e}")
         return 0
+
 init_db()
 threading.Thread(target=buffer_flush_thread, daemon=True).start()
+
+# --- СТАТИСТИКА ---
 def load_stats():
     if os.path.exists(STATS_FILE):
         try:
@@ -248,6 +271,7 @@ def load_stats():
             logger.error(f"Ошибка загрузки статистики: {e}")
             return default_stats()
     return default_stats()
+
 def default_stats():
     return {
         'total_users': 0,
@@ -257,6 +281,7 @@ def default_stats():
         'first_start': datetime.now().isoformat(),
         'last_save': datetime.now().isoformat()
     }
+
 def save_stats():
     try:
         bot_statistics['last_save'] = datetime.now().isoformat()
@@ -264,12 +289,17 @@ def save_stats():
             json.dump(bot_statistics, f, indent=2)
     except Exception as e:
         logger.error(f"Ошибка сохранения статистики: {e}")
+
 bot_statistics = load_stats()
 active_conversations = {}
 owner_client_map = {}
+
+# --- FLASK ПРИЛОЖЕНИЕ ---
 telegram_app = None
 flask_app = Flask(__name__)
 CORS(flask_app)
+
+# --- КЛАСС БОТА ---
 class TelegramBot:
     def __init__(self):
         self.application = Application.builder().token(BOT_TOKEN).build()
@@ -278,11 +308,12 @@ class TelegramBot:
         self.initialized = False
         self.polling_task = None
         self.loop = None
+
     async def set_commands_menu(self):
         commands = [
             ("start", "Головне меню"),
             ("help", "Допомога та інформація"),
-            ("pay", "Оплатити замовлення (з сайту або файлу)"), # Обновлена команда
+            ("pay", "Оплатити замовлення (з сайту або файлу)"),
             ("question", "Поставити запитання"),
             ("channel", "Наш головний канал"),
             ("stop", "Завершити поточний діалог")
@@ -300,6 +331,7 @@ class TelegramBot:
                 await self.application.bot.set_my_commands(owner_commands, scope=BotCommandScopeChat(owner_id))
         except Exception as e:
             logger.error(f"Ошибка установки команд: {e}")
+
     def setup_handlers(self):
         self.application.add_handler(CommandHandler("start", self.start))
         self.application.add_handler(CommandHandler("stop", self.stop_conversation))
@@ -318,6 +350,7 @@ class TelegramBot:
         self.application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, self.handle_message))
         self.application.add_handler(MessageHandler(filters.Document.ALL, self.handle_document)) # Оставлено
         self.application.add_error_handler(self.error_handler)
+
     async def initialize(self):
         try:
             await self.application.initialize()
@@ -326,6 +359,7 @@ class TelegramBot:
         except Exception as e:
             logger.error(f"❌ Ошибка инициализации Telegram Application: {e}")
             raise
+
     async def start_polling(self):
         try:
             if self.application.updater.running:
@@ -342,6 +376,7 @@ class TelegramBot:
         except Exception as e:
             logger.error(f"❌ Ошибка запуска polling: {e}")
             raise
+
     async def stop_polling(self):
         try:
             if self.application.updater and self.application.updater.running:
@@ -352,6 +387,8 @@ class TelegramBot:
                 await self.application.shutdown()
         except Exception as e:
             logger.error(f"❌ Ошибка остановки polling: {e}")
+
+    # --- ОСНОВНЫЕ КОМАНДЫ ---
     async def start(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         user = update.effective_user
         ensure_user_exists(user)
@@ -366,56 +403,111 @@ class TelegramBot:
         reply_markup = InlineKeyboardMarkup(keyboard)
         welcome_message = f"Ласкаво просимо, {user.first_name}! 👋\nЯ бот-помічник нашого магазину. Будь ласка, оберіть, що вас цікавить:"
         await update.message.reply_text(welcome_message.strip(), reply_markup=reply_markup)
+
     async def pay_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Обрабатывает команду /pay с новым форматом аргументов: /pay <order_id> <товар1> <товар2> ...
+        Формат товара: <сервіс>_<план>_<період>_<ціна>
+        """
         user = update.effective_user
         user_id = user.id
         ensure_user_exists(user)
+        
         if not context.args:
-            await update.message.reply_text("❌ Неправильний формат команди. Використовуйте: /pay <order_id> <товар1> <товар2> ...")
+            await update.message.reply_text(
+                "❌ Неправильний формат команди. Використовуйте: /pay <order_id> <товар1> <товар2> ...\n"
+                "Формат товару: <сервіс>_<план>_<період>_<ціна>\n"
+                "Наприклад: /pay order_123 ChatGPT_Plus_1_місяць_350 Netflix_Premium_1_місяць_350"
+            )
             return
+
         order_id = context.args[0]
-        items_str = " ".join(context.args[1:])
-        pattern = r'(\w{2,4})-(\w{2,4})-([\w\s$]+?)-(\d+)'
-        items = re.findall(pattern, items_str)
+        items_args = context.args[1:] # Остальные аргументы - это товары
+
+        if not items_args:
+            await update.message.reply_text("❌ Не вдалося розпізнати товари у замовленні. Перевірте формат.")
+            return
+
+        # Новый способ парсинга: ожидаем <сервіс>_<план>_<період>_<ціна>
+        # Цена - это последний числовой элемент после последнего подчеркивания
+        items = []
+        for item_arg in items_args:
+            parts = item_arg.split('_')
+            if len(parts) < 4:
+                 await update.message.reply_text(f"❌ Неправильний формат товару: {item_arg}. Очікується <сервіс>_<план>_<період>_<ціна>")
+                 return
+            # Цена - последний элемент, если это число
+            try:
+                price = int(parts[-1])
+            except ValueError:
+                 await update.message.reply_text(f"❌ Неправильна ціна у товару: {item_arg}. Ціна повинна бути цілим числом.")
+                 return
+            # Сервис - первый элемент
+            service_name = parts[0]
+            # План - второй элемент
+            plan_name = parts[1]
+            # Период - все, что между планом и ценой (элементы с 2 до len-1)
+            # Объединяем с пробелами, так как мини-приложение может использовать _ вместо пробелов
+            period_raw = "_".join(parts[2:-1])
+            # Заменяем _ на пробелы для отображения (если мини-приложение использует _ как замену пробелов)
+            display_period = period_raw.replace("_", " ").strip()
+
+            items.append({
+                'service': service_name,
+                'plan': plan_name,
+                'period': display_period,
+                'price': price
+            })
+
         if not items:
             await update.message.reply_text("❌ Не вдалося розпізнати товари у замовленні. Перевірте формат.")
             return
+
         order_text = f"🛍️ Замовлення з сайту (#{order_id}):\n"
         total = 0
         order_details = []
+        has_digital = False # Простая проверка на цифровой товар
+
         for item in items:
-            service_abbr = item[0]
-            plan_abbr = item[1]
-            period = item[2].strip()
-            price = item[3]
-            service_name = products.SERVICE_MAP.get(service_abbr, service_abbr)
-            plan_name = products.PLAN_MAP.get(plan_abbr, plan_abbr)
+            service_name = item['service']
+            plan_name = item['plan']
+            period = item['period']
+            price = item['price']
+
+            # Проверка на "Прикраси" или другие ключевые слова для определения типа заказа
+            # Можно адаптировать под конкретные названия из products.js
+            if "Прикраси" in service_name or "Gift Card" in service_name or "Nitro" in service_name:
+                has_digital = True
+
             try:
                 price_num = int(price)
                 total += price_num
-                order_type = 'digital_order' if service_abbr == 'DisU' else 'subscription_order'
-                display_period = period.replace("м", "міс.").replace(" ", "")
-                item_text = f"▫️ {service_name} {plan_name} ({display_period}) - {price_num} UAH\n"
+                item_text = f"▫️ {service_name} {plan_name} ({period}) - {price_num} UAH\n"
                 order_text += item_text
                 order_details.append({
                     'service': service_name,
                     'plan': plan_name,
-                    'period': display_period,
+                    'period': period,
                     'price': price_num
                 })
             except ValueError:
-                continue
+                 await update.message.reply_text(f"❌ Неправильна ціна у товару: {service_name} {plan_name}.")
+                 return # Прерываем обработку при ошибке
+
         if total == 0:
             await update.message.reply_text("❌ Не вдалося обробити замовлення. Перевірте формат товарів.")
             return
+
         order_text += f"\n💳 Всього: {total} UAH"
-        conversation_type = 'digital_order' if any(item[0] == 'DisU' for item in items) else 'subscription_order'
+        conversation_type = 'digital_order' if has_digital else 'subscription_order'
+
+        # Сохраняем информацию о платеже
         context.user_data['pending_payment'] = {
             'order_id': order_id,
             'items': order_details,
             'total_uah': total,
             'from_website': True
         }
+
         keyboard = [
             [InlineKeyboardButton("💳 Оплата по карті", callback_data=f'pay_card_{total}')],
             [InlineKeyboardButton("₿ Оплата криптовалютою", callback_data=f'pay_crypto_{total}')],
@@ -426,7 +518,9 @@ class TelegramBot:
             f"{order_text}\nОберіть спосіб оплати:",
             reply_markup=reply_markup
         )
+
     async def handle_document(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Обрабатывает JSON-файл с заказом."""
         user = update.effective_user
         document = update.message.document
         if document.mime_type != 'application/json':
@@ -446,14 +540,19 @@ class TelegramBot:
             logger.error(f"Помилка парсингу JSON: {e}")
             await update.message.reply_text("❌ Файл має неправильний формат JSON.")
             return
-        if 'items' not in order_data or 'total' not in order_ # Виправлено
+        if 'items' not in order_data or 'total' not in order_data:
             await update.message.reply_text("❌ У файлі відсутні обов'язкові поля (items, total).")
             return
         order_text = "🛍️ Замовлення з сайту (з файлу):\n"
         for item in order_data['items']:
             order_text += f"▫️ {item['service']} {item.get('plan', '')} ({item['period']}) - {item['price']} UAH\n"
         order_text += f"\n💳 Всього: {order_data['total']} UAH"
-        has_digital = any("Прикраси" in item.get('service', '') for item in order_data['items'])
+        has_digital = any(
+            "Прикраси" in item.get('service', '') or
+            "Gift Card" in item.get('service', '') or
+            "Nitro" in item.get('service', '')
+            for item in order_data['items']
+        )
         conversation_type = 'digital_order' if has_digital else 'subscription_order'
         user_id = user.id
         context.user_data['pending_payment'] = {
@@ -471,6 +570,7 @@ class TelegramBot:
             f"{order_text}\nОберіть спосіб оплати:",
             reply_markup=reply_markup
         )
+
     async def show_help(self, update: Update, context: ContextTypes.DEFAULT_TYPE = None):
         if isinstance(update, Update):
             message = update.message
@@ -489,6 +589,7 @@ class TelegramBot:
 💬 Якщо у вас виникли питання, не соромтеся звертатися!
         """
         await message.reply_text(help_text.strip())
+
     async def channel_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         keyboard = [[InlineKeyboardButton("📢 Перейти в SecureShopUA", url="https://t.me/SecureShopUA")]]
         reply_markup = InlineKeyboardMarkup(keyboard)
@@ -502,7 +603,8 @@ class TelegramBot:
 Приєднуйтесь, щоб бути в курсі всіх новин! 👇
         """
         await update.message.reply_text(message_text.strip(), reply_markup=reply_markup)
-    # Удалена команда /order
+
+    # --- Удалена команда /order ---
     # async def order_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
     #     keyboard = [
     #         [InlineKeyboardButton("💳 Підписки", callback_data='order_subscriptions')],
@@ -510,6 +612,7 @@ class TelegramBot:
     #         [InlineKeyboardButton("⬅️ Назад", callback_data='back_to_main')]
     #     ]
     #     await update.message.reply_text("📦 Оберіть тип товару:", reply_markup=InlineKeyboardMarkup(keyboard))
+
     async def question_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         user = update.effective_user
         user_id = user.id
@@ -534,6 +637,7 @@ class TelegramBot:
             "📝 Напишіть ваше запитання. Я передам його засновнику магазину.\n"
             "Щоб завершити цей діалог пізніше, використайте команду /stop."
         )
+
     async def stop_conversation(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         user = update.effective_user
         user_id = user.id
@@ -588,6 +692,7 @@ class TelegramBot:
             "ℹ️ У вас немає активного діалогу для завершення.\n"
             "Щоб розпочати новий діалог, використовуйте /start."
         )
+
     async def clear_active_conversations_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         owner_id = update.effective_user.id
         if owner_id not in [OWNER_ID_1, OWNER_ID_2]:
@@ -597,6 +702,7 @@ class TelegramBot:
         active_conversations.clear()
         owner_client_map.clear()
         await update.message.reply_text(f"✅ Усі активні діалоги очищено з бази даних. Видалено записів: {deleted_count}")
+
     async def show_stats(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         owner_id = update.effective_user.id
         if owner_id not in [OWNER_ID_1, OWNER_ID_2]:
@@ -639,6 +745,7 @@ class TelegramBot:
             )
         else:
             await update.message.reply_text("ℹ️ В базе данных нет пользователей для экспорта.")
+
     async def show_active_chats(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         owner_id = update.effective_user.id
         if owner_id not in [OWNER_ID_1, OWNER_ID_2]:
@@ -691,6 +798,7 @@ class TelegramBot:
         except Exception as e:
             logger.error(f"❌ Ошибка получения активных чатов: {e}")
             await update.message.reply_text("❌ Произошла ошибка при получении активных чатов.")
+
     async def show_conversation_history(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         owner_id = update.effective_user.id
         if owner_id not in [OWNER_ID_1, OWNER_ID_2]:
@@ -730,6 +838,7 @@ class TelegramBot:
         except Exception as e:
             logger.error(f"❌ Ошибка получения истории сообщений: {e}")
             await update.message.reply_text("❌ Произошла ошибка при получении истории.")
+
     async def start_dialog_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         owner_id = update.effective_user.id
         if owner_id not in [OWNER_ID_1, OWNER_ID_2]:
@@ -796,13 +905,17 @@ class TelegramBot:
             "💬 Теперь вы можете писать сообщения, и они будут отправлены этому пользователю.\n"
             "Для завершения диалога используйте /stop."
         )
+
+    # --- ОБРАБОТЧИК КНОПОК ---
     async def button_handler(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         query = update.callback_query
         await query.answer()
         user = query.from_user
         user_id = user.id
         ensure_user_exists(user)
-        # Удалены все обработчики кнопок, связанные с выбором товаров
+
+        # --- Удалены все обработчики кнопок, связанные с выбором товаров ---
+
         if query.data == 'back_to_main':
              keyboard = [
                  [InlineKeyboardButton("🛒 Зробити замовлення", url=MINI_APP_URL)], # <<< Ссылка на мини-приложение
@@ -897,7 +1010,7 @@ class TelegramBot:
                 elif 'product_id' in pending_payment:
                     order_id_suffix = pending_payment['product_id']
                 invoice_data = self.create_invoice(amount=amount, pay_currency=pay_currency_code, currency="uah", order_id_suffix=order_id_suffix)
-                if "error" in invoice_
+                if "error" in invoice_data:
                     await query.edit_message_text(f"❌ Ошибка создания платежа: {invoice_data['error']}")
                     return
                 pay_url = invoice_data.get("invoice_url")
@@ -1069,8 +1182,12 @@ class TelegramBot:
                      "Напишите ответ:"
             )
             await query.edit_message_text(f"✅ Вы продолжили диалог с клиентом ID: {client_id}.")
+
     def _save_order_and_notify_owners(self, context, user_id, user, pending_payment):
-        if 'product_id' in pending_payment:
+        """Сохраняет информацию о заказе и уведомляет владельцев."""
+        # Обновляем эту функцию, чтобы она работала с новым форматом pending_payment
+        if 'product_id' in pending_payment and 'type' in pending_payment:
+            # Старый формат (возможно, если бы осталась команда /order)
             order_text = f"🛍️ Хочу замовити: {pending_payment['product_name']} за {pending_payment['price_uah']} UAH"
             conversation_type = pending_payment['type'] + '_order'
             active_conversations[user_id] = {
@@ -1087,14 +1204,29 @@ class TelegramBot:
                  self.application.create_task(self.forward_order_to_owners(context, user_id, user, order_text))
             else:
                  asyncio.create_task(self.forward_order_to_owners(context, user_id, user, order_text))
-        elif 'order_id' in pending_payment:
+        elif 'order_id' in pending_payment and 'items' in pending_payment:
+            # Новый формат из /pay или JSON
             total_uah = pending_payment['total_uah']
             order_summary = "🛍️ Замовлення з сайту:\n"
             for item in pending_payment.get('items', []):
-                order_summary += f"▫️ {item.get('service', 'Невідомий товар')} {item.get('plan', '')} ({item.get('period', '')}) - {item.get('price', 0)} UAH\n"
-            order_summary += f"\n💳 Всього: {total_uah} UAH"
-            has_digital = any("Прикраси" in item.get('service', '') for item in pending_payment.get('items', []))
+                # Используем .get с дефолтными значениями для безопасности
+                service = item.get('service', 'Невідомий товар')
+                plan = item.get('plan', '')
+                period = item.get('period', '')
+                price = item.get('price', 0)
+                order_summary += f"▫️ {service} {plan} ({period}) - {price} UAH\n"
+
+            # Проверка на цифровой товар
+            has_digital = any(
+                "Прикраси" in item.get('service', '') or
+                "Gift Card" in item.get('service', '') or
+                "Nitro" in item.get('service', '')
+                for item in pending_payment.get('items', [])
+            )
             conversation_type = 'digital_order' if has_digital else 'subscription_order'
+
+            order_summary += f"\n💳 Всього: {total_uah} UAH"
+
             active_conversations[user_id] = {
                 'type': conversation_type,
                 'user_info': user,
@@ -1104,12 +1236,18 @@ class TelegramBot:
                 'from_website': pending_payment.get('from_website', False)
             }
             save_active_conversation(user_id, conversation_type, None, order_summary)
+            # Увеличиваем статистику на количество товаров в заказе
             bot_statistics['total_orders'] += len(pending_payment.get('items', []))
             save_stats()
             if hasattr(self.application, 'create_task'):
                  self.application.create_task(self.forward_order_to_owners(context, user_id, user, order_summary))
             else:
                  asyncio.create_task(self.forward_order_to_owners(context, user_id, user, order_summary))
+        # Если ни один из форматов не подошел, ничего не делаем или логируем ошибку
+        else:
+             logger.warning(f"_save_order_and_notify_owners: Неизвестный формат pending_payment: {pending_payment}")
+
+    # --- ОБРАБОТКА СООБЩЕНИЙ ---
     async def handle_message(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         user = update.effective_user
         user_id = user.id
@@ -1139,6 +1277,7 @@ class TelegramBot:
             message_text
         )
         await self.forward_to_owner(update, context)
+
     async def forward_to_owner(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         user_id = update.effective_user.id
         if user_id not in active_conversations:
@@ -1164,6 +1303,7 @@ class TelegramBot:
             update.message.text,
             assigned_owner
         )
+
     async def forward_to_both_owners(self, context, client_id, client_info, conversation_type, message_text):
         type_emoji = "🛒" if conversation_type in ['subscription_order', 'digital_order'] else "❓"
         type_text_map = {
@@ -1201,6 +1341,7 @@ class TelegramBot:
             text="✅ Ваше повідомлення передано засновникам магазину. "
                  "Очікуйте на відповідь найближчим часом."
         )
+
     async def forward_to_specific_owner(self, context, client_id, client_info, conversation_type, message_text, owner_id):
         type_emoji = "🛒" if conversation_type in ['subscription_order', 'digital_order'] else "❓"
         type_text_map = {
@@ -1250,7 +1391,9 @@ class TelegramBot:
                 message_text
             )
             await self.forward_to_specific_owner(context, client_id, client_info, conversation_type, message_text, other_owner)
+
     async def forward_order_to_owners(self, context, client_id, client_info, order_text):
+        """Уведомляет владельцев о новом заказе (для старого формата)."""
         conversation_type = 'digital_order' if 'Discord Прикраси' in order_text else 'subscription_order'
         active_conversations[client_id]['last_message'] = order_text
         save_active_conversation(client_id, conversation_type, None, order_text)
@@ -1284,6 +1427,7 @@ class TelegramBot:
                 )
             except Exception as e:
                 logger.error(f"  ❌ Ошибка отправки владельцу {owner_id}: {e}")
+
     async def handle_owner_message(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         owner = update.effective_user
         owner_id = owner.id
@@ -1325,14 +1469,18 @@ class TelegramBot:
                 "❌ Помилка при надсиланні повідомлення клієнту. "
                 "Можливо, клієнт заблокував бота."
             )
+
     async def error_handler(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         logger.warning(f'Update {update} caused error {context.error}')
+
+    # --- СЛУЖЕБНЫЕ ФУНКЦИИ ---
     def start_ping_service(self):
         if not self.ping_running:
             self.ping_running = True
             ping_thread = threading.Thread(target=self.ping_loop)
             ping_thread.daemon = True
             ping_thread.start()
+
     def ping_loop(self):
         import requests
         ping_url = f"{WEBHOOK_URL}/ping"
@@ -1348,6 +1496,7 @@ class TelegramBot:
             except Exception as e:
                 logger.error(f"❌ Неожиданная ошибка ping: {e}")
             time.sleep(PING_INTERVAL)
+
     def create_invoice(self, amount, pay_currency="usdtsol", currency="uah", order_id_suffix="unknown"):
         api_key = products.NOWPAYMENTS_API_KEY
         if not api_key or api_key in ['YOUR_NOWPAYMENTS_API_KEY_HERE', '']:
@@ -1373,7 +1522,11 @@ class TelegramBot:
         except Exception as e:
             logger.error(f"Неожиданная ошибка при создании инвойса: {e}")
             return {"error": f"Внутренняя ошибка: {e}"}
+
+# --- ИНИЦИАЛИЗАЦИЯ БОТА ---
 bot_instance = TelegramBot()
+
+# --- FLASK МАРШРУТЫ ---
 @flask_app.after_request
 def add_cors_headers(response):
     response.headers['Access-Control-Allow-Origin'] = '*'
@@ -1381,6 +1534,7 @@ def add_cors_headers(response):
     response.headers['Access-Control-Allow-Methods'] = 'GET, POST, PUT, DELETE, OPTIONS'
     response.headers['Access-Control-Allow-Credentials'] = 'true'
     return response
+
 @flask_app.route('/ping', methods=['GET'])
 def ping():
     return jsonify({
@@ -1391,6 +1545,7 @@ def ping():
         'bot_running': bot_running,
         'mode': 'polling' if USE_POLLING else 'webhook'
     }), 200
+
 @flask_app.route('/health', methods=['GET'])
 def health():
     return jsonify({
@@ -1405,6 +1560,7 @@ def health():
         'mode': 'polling' if USE_POLLING else 'webhook',
         'stats': bot_statistics
     }), 200
+
 @flask_app.route(f'/{BOT_TOKEN}', methods=['POST'])
 def webhook():
     if USE_POLLING:
@@ -1415,13 +1571,14 @@ def webhook():
         return jsonify({'error': 'Bot not initialized'}), 500
     try:
         json_data = request.get_json()
-        if json_
+        if json_data:
             update = Update.de_json(json_data, telegram_app.bot)
-            pass
+            telegram_app.update_queue.put_nowait(update)
         return '', 200
     except Exception as e:
         logger.error(f"Ошибка обработки webhook: {e}")
         return jsonify({'error': str(e)}), 500
+
 @flask_app.route('/', methods=['GET'])
 def index():
     return jsonify({
@@ -1435,10 +1592,13 @@ def index():
         'bot_running': bot_running,
         'stats': bot_statistics
     }), 200
+
+# --- ОСНОВНАЯ ЛОГИКА ЗАПУСКА ---
 def auto_save_loop():
     while True:
         time.sleep(300)
         save_stats()
+
 def main():
     if os.environ.get('RENDER'):
         time.sleep(10)
@@ -1457,6 +1617,7 @@ def main():
         use_reloader=False,
         threaded=True
     )
+
 async def setup_webhook():
     if USE_POLLING:
         try:
@@ -1471,6 +1632,7 @@ async def setup_webhook():
     except Exception as e:
         logger.error(f"❌ Ошибка установки webhook: {e}")
         return False
+
 async def start_bot():
     global telegram_app, bot_running
     with bot_lock:
@@ -1493,6 +1655,7 @@ async def start_bot():
             logger.error(f"❌ Ошибка запуска бота: {e}")
             bot_running = False
             raise
+
 def bot_thread():
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
@@ -1517,5 +1680,6 @@ def bot_thread():
             pass
         time.sleep(5)
         bot_thread()
+
 if __name__ == '__main__':
     main()
