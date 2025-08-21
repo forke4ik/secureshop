@@ -476,11 +476,18 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
                     "command": command,
                 }
 
+                # Создаем сообщение с деталями заказа
+                order_text = (
+                    f"🛍️ Нове замовлення #{order_id}\n"
+                    f"Сервіс: {service['name']}\n"
+                    f"План: {service['plans'][plan_key]['name']}\n"
+                    f"Період: {period}\n"
+                    f"Сума: {price} UAH\n\n"
+                )
+
                 message = (
-                    f"🛍️ Ваше замовлення готове!\n\n"
-                    f"Скопіюйте цю команду та відправте її боту для підтвердження:\n"
-                    f"<code>{command}</code>\n\n"
-                    f"Або оберіть спосіб оплати нижче."
+                    f"{order_text}"
+                    f"Оберіть спосіб оплати:"
                 )
 
                 keyboard = [
@@ -499,7 +506,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
                 ]
 
                 await query.message.edit_text(
-                    message, parse_mode="HTML", reply_markup=InlineKeyboardMarkup(keyboard)
+                    message, reply_markup=InlineKeyboardMarkup(keyboard)
                 )
             else:
                 await query.message.edit_text("❌ Помилка: сервіс або план не знайдено.")
@@ -625,11 +632,16 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
                 "command": command,
             }
 
+            # Создаем сообщение с деталями заказа
+            order_text = (
+                f"🛍️ Нове замовлення #{order_id}\n"
+                f"Товар: {product_data['name']}\n"
+                f"Сума: {product_data['price']} UAH\n\n"
+            )
+
             message = (
-                f"🛍️ Ваше замовлення готове!\n\n"
-                f"Скопіюйте цю команду та відправте її боту для підтвердження:\n"
-                f"<code>{command}</code>\n\n"
-                f"Або оберіть спосіб оплати нижче."
+                f"{order_text}"
+                f"Оберіть спосіб оплати:"
             )
 
             keyboard = [
@@ -648,7 +660,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             ]
 
             await query.message.edit_text(
-                message, parse_mode="HTML", reply_markup=InlineKeyboardMarkup(keyboard)
+                message, reply_markup=InlineKeyboardMarkup(keyboard)
             )
         else:
             await query.message.edit_text("❌ Помилка: цифровий товар не знайдено.")
@@ -729,21 +741,43 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     elif query.data in ["paid_card", "paid_crypto"]:
         pending_order = context.user_data.get("pending_order")
         if pending_order:
-            # Отправляем уведомление владельцам
+            # Отправляем уведомление владельцам с деталями заказа
             order_summary = (
-                f"🛍️ Нове замовлення від @{user.username or user.first_name} (ID: {user_id})\n"
-                f"Сервіс: {pending_order['service']}\n"
-                f"План: {pending_order['plan']}\n"
-                f"Період: {pending_order['period']}\n"
-                f"Сума: {pending_order['price']} UAH\n"
-                f"Команда: <code>{pending_order['command']}</code>"
+                f"🛍️ НОВЕ ЗАМОВЛЕННЯ #{pending_order['order_id']}\n\n"
+                f"👤 Клієнт: @{user.username or user.first_name} (ID: {user_id})\n\n"
+                f"📦 Деталі замовлення:\n"
             )
+            
+            if pending_order['service'] == "Цифровий товар":
+                order_summary += (
+                    f"▫️ Товар: {pending_order['plan']}\n"
+                    f"▫️ Кількість: 1 шт\n"
+                    f"▫️ Сума: {pending_order['price']} UAH\n"
+                )
+            else:
+                order_summary += (
+                    f"▫️ Сервіс: {pending_order['service']}\n"
+                    f"▫️ План: {pending_order['plan']}\n"
+                    f"▫️ Період: {pending_order['period']}\n"
+                    f"▫️ Сума: {pending_order['price']} UAH\n"
+                )
+            
+            order_summary += (
+                f"\n💳 ЗАГАЛЬНА СУМА: {pending_order['price']} UAH\n\n"
+                f"Команда для підтвердження: <code>{pending_order['command']}</code>\n\n"
+                f"Натисніть '✅ Взяти', щоб обробити це замовлення."
+            )
+
+            keyboard = [
+                [InlineKeyboardButton("✅ Взяти", callback_data=f"take_order_{user_id}")]
+            ]
+            reply_markup = InlineKeyboardMarkup(keyboard)
 
             success = False
             for owner_id in OWNER_IDS:
                 try:
                     await context.bot.send_message(
-                        chat_id=owner_id, text=order_summary, parse_mode="HTML"
+                        chat_id=owner_id, text=order_summary, parse_mode="HTML", reply_markup=reply_markup
                     )
                     success = True
                 except Exception as e:
@@ -751,7 +785,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 
             if success:
                 await query.message.edit_text(
-                    "✅ Дякуємо за оплату! Ми зв'яжемося з вами найближчим часом."
+                    "✅ Дякуємо за оплату! Ми зв'яжемося з вами найближчим часом для підтвердження замовлення."
                 )
             else:
                 await query.message.edit_text(
@@ -779,6 +813,42 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         else:
             await query.message.edit_text("❌ Оплата вже скасована або відсутня.")
 
+    # --- Обработка взятия заказа владельцем ---
+    elif query.data.startswith("take_order_"):
+        client_id = int(query.data.split("_")[-1])
+        owner_id = user_id
+
+        # Проверяем, не взят ли уже заказ другим владельцем
+        if client_id in active_conversations and active_conversations[client_id].get("assigned_owner"):
+            await query.answer("❌ Це замовлення вже обробляється іншим представником магазину.", show_alert=True)
+            return
+
+        # Начинаем диалог
+        client_info = users_db.get(client_id, {})
+        active_conversations[client_id] = {
+            "assigned_owner": owner_id,
+            "user_info": client_info,
+            "type": "order", # или "subscription_order", "digital_order" если нужно точнее
+            "order_details": context.user_data.get("pending_order", {})
+        }
+        owner_client_map[owner_id] = client_id
+
+        # Уведомляем клиента
+        try:
+            await context.bot.send_message(
+                chat_id=client_id,
+                text="✅ Ваше замовлення прийнято! Представник магазину зв'яжеться з вами найближчим часом.\n\n"
+                     "Для завершення діалогу використовуйте /stop."
+            )
+            # Уведомляем владельца
+            await query.message.edit_text(
+                f"✅ Ви взяли замовлення від клієнта {client_info.get('first_name', 'Невідомий')} (ID: {client_id}).\n\n"
+                "Тепер ви можете надсилати повідомлення цьому клієнту. Для завершення діалогу використовуйте /stop."
+            )
+        except Exception as e:
+            logger.error(f"Ошибка при начале диалога: {e}")
+            await query.message.edit_text("❌ Помилка при початку діалогу.")
+
     # --- Команды владельца (оставлены без изменений, как в оригинале) ---
     # ... (stats, chats, orders, questions, history, dialog, clear и т.д.)
 
@@ -796,8 +866,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 
     # Если пользователь - владелец, обрабатываем его сообщения отдельно
     if is_owner:
-        # ... (логика обработки сообщений владельца, как в оригинале)
-        # Например, пересылка сообщений клиенту
+        # Пересылка сообщений клиенту в рамках активного диалога
         if user_id in owner_client_map:
             client_id = owner_client_map[user_id]
             try:
@@ -805,7 +874,8 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
                     chat_id=client_id,
                     text=f"📩 Відповідь від магазину:\n{message_text}",
                 )
-                await update.message.reply_text("✅ Повідомлення надіслано клієнту.")
+                # Можно не подтверждать отправку владельцу, или отправить краткое подтверждение
+                # await update.message.reply_text("✅ Повідомлення надіслано клієнту.")
             except Exception as e:
                 logger.error(
                     f"Ошибка при пересылке сообщения от владельца {user_id} клиенту {client_id}: {e}"
@@ -886,9 +956,14 @@ async def pay_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         full_info = get_full_product_info(parsed_item)
         if full_info:
             total_uah += full_info["price"]
-            order_details.append(
-                f"▫️ {full_info['service_name']} {full_info['plan_name']} ({full_info['period']}) - {full_info['price']} UAH"
-            )
+            if full_info['type'] == 'digital':
+                order_details.append(
+                    f"▫️ {full_info['service_name']} {full_info['plan_name']} - {full_info['price']} UAH"
+                )
+            else:
+                order_details.append(
+                    f"▫️ {full_info['service_name']} {full_info['plan_name']} ({full_info['period']}) - {full_info['price']} UAH"
+                )
         else:
             # Если не удалось получить информацию, добавляем "сырой" элемент
             order_details.append(
@@ -901,39 +976,26 @@ async def pay_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     order_text += "\n".join(order_details)
     order_text += f"\n\n💳 Всього: {total_uah} UAH"
 
-    # Отправляем уведомление владельцам
+    # Отправляем уведомление владельцам с кнопкой "Взять"
+    keyboard = [
+        [InlineKeyboardButton("✅ Взяти", callback_data=f"take_order_{user.id}")]
+    ]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+
     success = False
     for owner_id in OWNER_IDS:
         try:
-            await context.bot.send_message(chat_id=owner_id, text=order_text)
+            await context.bot.send_message(chat_id=owner_id, text=order_text, reply_markup=reply_markup)
             success = True
         except Exception as e:
             logger.error(f"Не удалось отправить заказ владельцу {owner_id}: {e}")
 
     if success:
-        # Создаем инвойс в NOWPayments
-        invoice_data = create_nowpayments_invoice(total_uah, order_id, "Замовлення через /pay")
-
-        if invoice_data and "invoice_url" in invoice_data:
-            pay_url = invoice_data["invoice_url"]
-            payment_message = (
-                f"✅ Дякуємо за замовлення #{order_id}!\n"
-                f"💳 Сума до сплати: {total_uah} UAH\n\n"
-                f"Натисніть кнопку нижче для переходу до оплати:\n"
-                f"🔗 [Оплатити зараз]({pay_url})"
-            )
-            keyboard = [[InlineKeyboardButton("🔗 Оплатити зараз", url=pay_url)]]
-            await update.message.reply_text(
-                payment_message, parse_mode="Markdown", reply_markup=InlineKeyboardMarkup(keyboard)
-            )
-        else:
-            error_msg = invoice_data.get("error", "Невідома помилка")
-            await update.message.reply_text(
-                f"✅ Дякуємо за замовлення #{order_id}!\n"
-                f"💳 Сума до сплати: {total_uah} UAH\n"
-                f"⚠️ Помилка створення посилання для оплати: {error_msg}\n\n"
-                f"Ми зв'яжемося з вами найближчим часом для підтвердження."
-            )
+        await update.message.reply_text(
+            f"✅ Дякуємо за замовлення #{order_id}!\n"
+            f"💳 Сума до сплати: {total_uah} UAH\n\n"
+            f"Ми зв'яжемося з вами найближчим часом для підтвердження."
+        )
     else:
         await update.message.reply_text(
             "❌ На жаль, не вдалося обробити ваше замовлення. Спробуйте пізніше."
