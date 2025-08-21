@@ -1,5 +1,3 @@
-# main.py
-
 import os
 import logging
 import asyncio
@@ -28,7 +26,6 @@ from telegram.ext import (
 import psycopg
 from psycopg.rows import dict_row
 
-# Импортируем наши новые модули
 from config import (
     BOT_TOKEN,
     DATABASE_URL,
@@ -36,7 +33,7 @@ from config import (
     OWNER_ID_2,
     NOWPAYMENTS_API_KEY,
     NOWPAYMENTS_IPN_SECRET,
-    PAYMENT_CURRENCY,  # Будет "UAH"
+    PAYMENT_CURRENCY,
     CARD_NUMBER,
 )
 from products_config import SUBSCRIPTIONS, DIGITAL_PRODUCTS, DIGITAL_PRODUCT_MAP
@@ -47,7 +44,6 @@ from pay_rules import (
     generate_pay_command_from_digital_product,
 )
 
-# --- НАСТРОЙКИ ---
 logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", level=logging.INFO
 )
@@ -59,22 +55,13 @@ bot_lock = threading.Lock()
 
 OWNER_IDS = [id for id in [OWNER_ID_1, OWNER_ID_2] if id is not None]
 
-# NOWPayments API
 NOWPAYMENTS_API_URL = "https://api.nowpayments.io/v1"
 
-# --- ГЛОБАЛЬНЫЕ ПЕРЕМЕННЫЕ ДЛЯ СОСТОЯНИЯ ---
-# В реальном приложении это лучше хранить в БД или кэше
-users_db = {}  # Хранение информации о пользователях (временно)
-active_conversations = {}  # Активные диалоги {client_id: {assigned_owner, user_info, type}}
-owner_client_map = {}  # Сопоставление владельца с клиентом {owner_id: client_id}
+users_db = {}
+active_conversations = {}
+owner_client_map = {}
 
-# --- ФУНКЦИИ РАБОТЫ С БАЗОЙ ДАННЫХ ---
-# (Оставлены без изменений, как в оригинале)
-# ... (все функции работы с БД из оригинального main.py)
-
-# --- ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ---
 def ensure_user_exists(user):
-    """Проверяет и создает/обновляет запись пользователя в БД."""
     try:
         with psycopg.connect(DATABASE_URL) as conn:
             with conn.cursor(row_factory=dict_row) as cur:
@@ -104,11 +91,7 @@ def ensure_user_exists(user):
     except Exception as e:
         logger.error(f"Ошибка при добавлении/обновлении пользователя {user.id}: {e}")
 
-# --- ФУНКЦИИ NOWPAYMENTS ---
 def create_nowpayments_invoice(amount_uah, order_id, product_name):
-    """
-    Создает инвойс в NOWPayments.
-    """
     logger.info(
         f"Создание инвойса NOWPayments: сумма {amount_uah} {PAYMENT_CURRENCY}, заказ {order_id}"
     )
@@ -127,12 +110,12 @@ def create_nowpayments_invoice(amount_uah, order_id, product_name):
 
     payload = {
         "price_amount": amount_uah,
-        "price_currency": PAYMENT_CURRENCY,  # Используем UAH
+        "price_currency": PAYMENT_CURRENCY,
         "order_id": order_id,
         "order_description": f"Оплата за {product_name}",
-        "ipn_callback_url": f"https://your-render-app-url.onrender.com/ipn", # Замените на ваш URL
-        "success_url": "https://t.me/SecureShopBot", # URL успеха
-        "cancel_url": "https://t.me/SecureShopBot",   # URL отмены
+        "ipn_callback_url": f"https://your-render-app-url.onrender.com/ipn",
+        "success_url": "https://t.me/SecureShopBot",
+        "cancel_url": "https://t.me/SecureShopBot",
     }
 
     try:
@@ -151,9 +134,7 @@ def create_nowpayments_invoice(amount_uah, order_id, product_name):
         logger.error(f"Исключение при создании инвойса NOWPayments: {e}")
         return {"error": f"Исключение: {e}"}
 
-# --- ОБРАБОТЧИКИ КОМАНД ---
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Отправляет приветственное сообщение."""
     logger.info(f"Вызов /start пользователем {update.effective_user.id}")
     user = update.effective_user
     ensure_user_exists(user)
@@ -181,7 +162,6 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         await update.message.reply_text(greeting, reply_markup=reply_markup)
 
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Отправляет справку."""
     logger.info(f"Вызов /help пользователем {update.effective_user.id}")
     help_text = (
         "👋 Доброго дня! Я бот магазину SecureShop.\n\n"
@@ -200,7 +180,6 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     await update.message.reply_text(help_text)
 
 async def channel_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Отправляет ссылку на канал."""
     logger.info(f"Вызов /channel пользователем {update.effective_user.id}")
     keyboard = [
         [InlineKeyboardButton("📢 Перейти в SecureShopUA", url="https://t.me/SecureShopUA")]
@@ -218,7 +197,6 @@ async def channel_command(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     await update.message.reply_text(message_text, reply_markup=reply_markup)
 
 async def order_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Начинает процесс заказа."""
     logger.info(f"Вызов /order пользователем {update.effective_user.id}")
     keyboard = [
         [InlineKeyboardButton("💳 Підписки", callback_data="order_subscriptions")],
@@ -230,7 +208,6 @@ async def order_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     )
 
 async def question_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Начинает процесс задания вопроса."""
     logger.info(f"Вызов /question пользователем {update.effective_user.id}")
     user = update.effective_user
     ensure_user_exists(user)
@@ -241,15 +218,12 @@ async def question_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     )
 
 async def stop_conversation(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Завершает текущий диалог."""
     logger.info(f"Вызов /stop пользователем {update.effective_user.id}")
     user_id = update.effective_user.id
     user_name = update.effective_user.first_name
 
-    # Если это владелец, завершаем диалог с клиентом
     if user_id in OWNER_IDS and user_id in owner_client_map:
         client_id = owner_client_map[user_id]
-        # client_info = active_conversations.get(client_id, {}).get('user_info')
         if client_id in active_conversations:
             del active_conversations[client_id]
         del owner_client_map[user_id]
@@ -268,7 +242,6 @@ async def stop_conversation(update: Update, context: ContextTypes.DEFAULT_TYPE) 
             )
         return
 
-    # Если это клиент, завершаем его диалог
     if user_id in active_conversations:
         owner_id = active_conversations[user_id].get("assigned_owner")
         if owner_id and owner_id in owner_client_map:
@@ -285,9 +258,61 @@ async def stop_conversation(update: Update, context: ContextTypes.DEFAULT_TYPE) 
     else:
         await update.message.reply_text("У вас немає активного діалогу.")
 
-# --- ОБРАБОТЧИКИ CALLBACK-ЗАПРОСОВ ---
+async def dialog_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    logger.info(f"Вызов /dialog пользователем {update.effective_user.id}")
+    owner_id = update.effective_user.id
+    if owner_id not in OWNER_IDS:
+        return
+    if not context.args:
+        await update.message.reply_text("ℹ️ Использование: /dialog <user_id>")
+        return
+    try:
+        client_id = int(context.args[0])
+    except ValueError:
+        await update.message.reply_text("❌ Неверный формат ID. ID должно быть числом.")
+        return
+
+    if client_id in active_conversations:
+        await update.message.reply_text("❌ Этот клиент уже обслуживается.")
+        return
+
+    try:
+        with psycopg.connect(DATABASE_URL) as conn:
+            with conn.cursor(row_factory=dict_row) as cur:
+                cur.execute("SELECT * FROM users WHERE id = %s", (client_id,))
+                client_info = cur.fetchone()
+    except Exception as e:
+        logger.error(f"Ошибка получения информации о пользователе {client_id}: {e}")
+        await update.message.reply_text("❌ Ошибка при получении информации о пользователе.")
+        return
+
+    if not client_info:
+        await update.message.reply_text("❌ Пользователь не найден.")
+        return
+
+    active_conversations[client_id] = {
+        "assigned_owner": owner_id,
+        "user_info": client_info,
+        "type": "manual_dialog",
+        "last_message": "Діалог розпочато вручну"
+    }
+    owner_client_map[owner_id] = client_id
+
+    try:
+        await context.bot.send_message(
+            chat_id=client_id,
+            text="👤 Представник магазину розпочав з вами діалог вручну.\n\n"
+                 "Для завершення діалогу використовуйте /stop."
+        )
+        await update.message.reply_text(
+            f"✅ Ви розпочали діалог з клієнтом {client_info['first_name']} (ID: {client_id}).\n\n"
+            "Тепер ви можете надсилати повідомлення цьому клієнту. Для завершення діалогу використовуйте /stop."
+        )
+    except Exception as e:
+        logger.error(f"Ошибка при начале ручного диалога: {e}")
+        await update.message.reply_text("❌ Помилка при початку діалогу.")
+
 async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Обрабатывает нажатия на кнопки."""
     query = update.callback_query
     await query.answer()
     user = query.from_user
@@ -296,7 +321,6 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 
     logger.info(f"Получен callback запрос '{query.data}' от пользователя {user_id}")
 
-    # --- Навигация верхнего уровня ---
     if query.data == "order":
         keyboard = [
             [InlineKeyboardButton("💳 Підписки", callback_data="order_subscriptions")],
@@ -374,7 +398,6 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             greeting = f"👋 Привіт, {user.first_name}!\nЛаскаво просимо до SecureShop!"
             await query.message.edit_text(greeting, reply_markup=reply_markup)
 
-    # --- Обработка подписок ---
     elif query.data == "order_subscriptions":
         keyboard = []
         for service_key, service_data in SUBSCRIPTIONS.items():
@@ -461,12 +484,10 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             service = SUBSCRIPTIONS.get(service_key)
 
             if service and plan_key in service["plans"]:
-                # Генерируем команду /pay
                 command, order_id = generate_pay_command_from_selection(
                     user_id, service_key, plan_key, period, price
                 )
 
-                # Сохраняем информацию о заказе
                 context.user_data["pending_order"] = {
                     "order_id": order_id,
                     "service": service["name"],
@@ -476,7 +497,6 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
                     "command": command,
                 }
 
-                # Создаем сообщение с деталями заказа
                 order_text = (
                     f"🛍️ Нове замовлення #{order_id}\n"
                     f"Сервіс: {service['name']}\n"
@@ -514,11 +534,9 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             logger.error(f"Ошибка обработки add_ callback: {e}")
             await query.message.edit_text("❌ Помилка обробки вибору періоду.")
 
-    # --- Обработка цифровых товаров ---
     elif query.data == "order_digital":
         keyboard = [
             [InlineKeyboardButton("🎮 Discord Украшення", callback_data="digital_discord_decor")],
-            # Добавляем PSN Gift Cards как отдельный пункт
             [InlineKeyboardButton("🎮 PSN Gift Cards", callback_data="digital_psn_cards")],
             [InlineKeyboardButton("⬅️ Назад", callback_data="order")],
         ]
@@ -526,9 +544,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             "🎮 Оберіть цифровий товар:", reply_markup=InlineKeyboardMarkup(keyboard)
         )
 
-    # --- Обработка Discord Украшення с вкладками ---
     elif query.data == "digital_discord_decor":
-        # Показываем вкладки "Без Nitro" и "З Nitro"
         keyboard = [
             [
                 InlineKeyboardButton(
@@ -548,11 +564,9 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         )
 
     elif query.data == "discord_decor_bzn":
-        # Показываем товары "Без Nitro"
         keyboard = []
         for product_callback, product_id in DIGITAL_PRODUCT_MAP.items():
             product_data = DIGITAL_PRODUCTS[product_id]
-            # Фильтруем только товары категории 'bzn'
             if product_data.get("category") == "bzn":
                 keyboard.append(
                     [
@@ -571,11 +585,9 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         )
 
     elif query.data == "discord_decor_zn":
-        # Показываем товары "З Nitro"
         keyboard = []
         for product_callback, product_id in DIGITAL_PRODUCT_MAP.items():
             product_data = DIGITAL_PRODUCTS[product_id]
-            # Фильтруем только товары категории 'zn'
             if product_data.get("category") == "zn":
                 keyboard.append(
                     [
@@ -593,13 +605,10 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             reply_markup=InlineKeyboardMarkup(keyboard),
         )
 
-    # --- Обработка PSN Gift Cards ---
     elif query.data == "digital_psn_cards":
-        # Показываем все PSN Gift Cards
         keyboard = []
         for product_callback, product_id in DIGITAL_PRODUCT_MAP.items():
             product_data = DIGITAL_PRODUCTS[product_id]
-            # Фильтруем только товары категории 'psn'
             if product_data.get("category") == "psn":
                 keyboard.append(
                     [
@@ -614,7 +623,6 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             "🎮 PSN Gift Cards:", reply_markup=InlineKeyboardMarkup(keyboard)
         )
 
-    # --- Обработка выбора конкретного цифрового товара ---
     elif query.data.startswith("digital_"):
         product_id = DIGITAL_PRODUCT_MAP.get(query.data)
         if product_id:
@@ -632,7 +640,6 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
                 "command": command,
             }
 
-            # Создаем сообщение с деталями заказа
             order_text = (
                 f"🛍️ Нове замовлення #{order_id}\n"
                 f"Товар: {product_data['name']}\n"
@@ -665,7 +672,6 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         else:
             await query.message.edit_text("❌ Помилка: цифровий товар не знайдено.")
 
-    # --- Обработка оплаты ---
     elif query.data.startswith("pay_card_"):
         try:
             price = int(query.data.split("_")[2])
@@ -675,21 +681,25 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
                 await query.message.edit_text("❌ Помилка: інформація про замовлення відсутня.")
                 return
 
+            formatted_card_number = f"`{CARD_NUMBER}`"
+
             message = (
                 f"💳 Оплата карткою:\n"
                 f"Сума: {price} UAH\n"
-                f"Номер картки: {CARD_NUMBER}\n"
+                f"Номер картки: {formatted_card_number}\n"
+                f"(Натисніть на номер, щоб скопіювати)\n"
                 f"Призначення платежу: Оплата за {pending_order['service']} {pending_order['plan']} ({pending_order['period']})\n\n"
-                f"Після оплати натисніть кнопку нижче."
+                f"Після оплати натисніть одну з кнопок нижче."
             )
 
             keyboard = [
-                [InlineKeyboardButton("✅ Оплачено", callback_data="paid_card")],
+                [InlineKeyboardButton("✅ Оплачено (Карта)", callback_data="paid_card")],
+                [InlineKeyboardButton("✅ Оплачено (Крипта)", callback_data="paid_crypto")],
                 [InlineKeyboardButton("❌ Скасувати", callback_data="cancel_payment")],
             ]
 
             await query.message.edit_text(
-                message, reply_markup=InlineKeyboardMarkup(keyboard)
+                message, parse_mode="Markdown", reply_markup=InlineKeyboardMarkup(keyboard)
             )
         except Exception as e:
             logger.error(f"Ошибка обработки оплаты картой: {e}")
@@ -704,25 +714,25 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
                 await query.message.edit_text("❌ Помилка: інформація про замовлення відсутня.")
                 return
 
-            # Создаем инвойс в NOWPayments
             invoice_data = create_nowpayments_invoice(
                 price,
                 pending_order["order_id"],
                 f"{pending_order['service']} {pending_order['plan']} ({pending_order['period']})",
             )
 
-            if invoice_data and "invoice_url" in invoice_data:
+            if invoice_data and "invoice_url" in invoice_
                 pay_url = invoice_data["invoice_url"]
                 message = (
                     f"₿ Оплата криптовалютою:\n"
                     f"Сума: {price} UAH\n"
                     f"Натисніть кнопку нижче для переходу до оплати.\n\n"
-                    f"Після оплати натисніть кнопку \"✅ Оплачено\"."
+                    f"Після оплати натисніть одну з кнопок \"✅ Оплачено\"."
                 )
 
                 keyboard = [
                     [InlineKeyboardButton("🔗 Перейти до оплати", url=pay_url)],
-                    [InlineKeyboardButton("✅ Оплачено", callback_data="paid_crypto")],
+                    [InlineKeyboardButton("✅ Оплачено (Карта)", callback_data="paid_card")],
+                    [InlineKeyboardButton("✅ Оплачено (Крипта)", callback_data="paid_crypto")],
                     [InlineKeyboardButton("❌ Скасувати", callback_data="cancel_payment")],
                 ]
 
@@ -741,13 +751,12 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     elif query.data in ["paid_card", "paid_crypto"]:
         pending_order = context.user_data.get("pending_order")
         if pending_order:
-            # Отправляем уведомление владельцам с деталями заказа
             order_summary = (
                 f"🛍️ НОВЕ ЗАМОВЛЕННЯ #{pending_order['order_id']}\n\n"
                 f"👤 Клієнт: @{user.username or user.first_name} (ID: {user_id})\n\n"
                 f"📦 Деталі замовлення:\n"
             )
-            
+
             if pending_order['service'] == "Цифровий товар":
                 order_summary += (
                     f"▫️ Товар: {pending_order['plan']}\n"
@@ -761,7 +770,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
                     f"▫️ Період: {pending_order['period']}\n"
                     f"▫️ Сума: {pending_order['price']} UAH\n"
                 )
-            
+
             order_summary += (
                 f"\n💳 ЗАГАЛЬНА СУМА: {pending_order['price']} UAH\n\n"
                 f"Команда для підтвердження: <code>{pending_order['command']}</code>\n\n"
@@ -792,7 +801,6 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
                     "✅ Дякуємо за оплату! Виникла помилка при відправці сповіщення, але оплата прийнята."
                 )
 
-            # Очищаем данные заказа
             context.user_data.pop("pending_order", None)
         else:
             await query.message.edit_text("ℹ️ Інформація про оплату вже оброблена або відсутня.")
@@ -808,39 +816,33 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
                 f"Сума: {pending_order['price']} UAH\n\n"
                 f"Ви можете зробити нове замовлення через /start."
             )
-            # Очищаем данные заказа
             context.user_data.pop("pending_order", None)
         else:
             await query.message.edit_text("❌ Оплата вже скасована або відсутня.")
 
-    # --- Обработка взятия заказа владельцем ---
     elif query.data.startswith("take_order_"):
         client_id = int(query.data.split("_")[-1])
         owner_id = user_id
 
-        # Проверяем, не взят ли уже заказ другим владельцем
         if client_id in active_conversations and active_conversations[client_id].get("assigned_owner"):
             await query.answer("❌ Це замовлення вже обробляється іншим представником магазину.", show_alert=True)
             return
 
-        # Начинаем диалог
         client_info = users_db.get(client_id, {})
         active_conversations[client_id] = {
             "assigned_owner": owner_id,
             "user_info": client_info,
-            "type": "order", # или "subscription_order", "digital_order" если нужно точнее
+            "type": "order",
             "order_details": context.user_data.get("pending_order", {})
         }
         owner_client_map[owner_id] = client_id
 
-        # Уведомляем клиента
         try:
             await context.bot.send_message(
                 chat_id=client_id,
                 text="✅ Ваше замовлення прийнято! Представник магазину зв'яжеться з вами найближчим часом.\n\n"
                      "Для завершення діалогу використовуйте /stop."
             )
-            # Уведомляем владельца
             await query.message.edit_text(
                 f"✅ Ви взяли замовлення від клієнта {client_info.get('first_name', 'Невідомий')} (ID: {client_id}).\n\n"
                 "Тепер ви можете надсилати повідомлення цьому клієнту. Для завершення діалогу використовуйте /stop."
@@ -849,24 +851,16 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             logger.error(f"Ошибка при начале диалога: {e}")
             await query.message.edit_text("❌ Помилка при початку діалогу.")
 
-    # --- Команды владельца (оставлены без изменений, как в оригинале) ---
-    # ... (stats, chats, orders, questions, history, dialog, clear и т.д.)
-
-# --- ОБРАБОТЧИКИ СООБЩЕНИЙ ---
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Обрабатывает текстовые сообщения."""
     logger.info(f"Получено текстовое сообщение от пользователя {update.effective_user.id}")
     user = update.effective_user
     user_id = user.id
     message_text = update.message.text
     ensure_user_exists(user)
 
-    # Проверка, является ли пользователь владельцем
     is_owner = user_id in OWNER_IDS
 
-    # Если пользователь - владелец, обрабатываем его сообщения отдельно
     if is_owner:
-        # Пересылка сообщений клиенту в рамках активного диалога
         if user_id in owner_client_map:
             client_id = owner_client_map[user_id]
             try:
@@ -874,8 +868,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
                     chat_id=client_id,
                     text=f"📩 Відповідь від магазину:\n{message_text}",
                 )
-                # Можно не подтверждать отправку владельцу, или отправить краткое подтверждение
-                # await update.message.reply_text("✅ Повідомлення надіслано клієнту.")
             except Exception as e:
                 logger.error(
                     f"Ошибка при пересылке сообщения от владельца {user_id} клиенту {client_id}: {e}"
@@ -889,16 +881,13 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             )
         return
 
-    # Если это команда /pay
     if message_text.startswith("/pay"):
         await pay_command(update, context)
         return
 
-    # Обработка диалога с пользователем (вопросы, заказы)
     conversation_type = context.user_data.get("conversation_type")
 
     if conversation_type == "question":
-        # Пересылаем вопрос владельцам
         forward_message = (
             f"❓ Нове запитання від клієнта:\n"
             f"👤 Клієнт: {user.first_name}\n"
@@ -929,26 +918,20 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             )
         return
 
-    # Если ничего не подошло, предлагаем меню
     await start(update, context)
 
-# --- ОБРАБОТЧИК КОМАНДЫ /PAY ---
 async def pay_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Обрабатывает команду /pay."""
     logger.info(f"Вызов /pay пользователем {update.effective_user.id}")
     user = update.effective_user
     ensure_user_exists(user)
 
-    # Парсим аргументы команды
     order_id, result = parse_pay_command(context.args)
     if order_id is None:
-        # result содержит сообщение об ошибке
         await update.message.reply_text(result)
         return
 
-    parsed_items = result  # result теперь это список распарсенных элементов
+    parsed_items = result
 
-    # Преобразуем распарсенные элементы в полную информацию
     order_details = []
     total_uah = 0
 
@@ -965,18 +948,15 @@ async def pay_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
                     f"▫️ {full_info['service_name']} {full_info['plan_name']} ({full_info['period']}) - {full_info['price']} UAH"
                 )
         else:
-            # Если не удалось получить информацию, добавляем "сырой" элемент
             order_details.append(
                 f"▫️ ???? ({parsed_item['service_abbr']}-{parsed_item['plan_abbr']}-{parsed_item['period']}) - {parsed_item['price']} UAH"
             )
             total_uah += parsed_item["price"]
 
-    # Формируем текст заказа
     order_text = f"🛍️ Нове замовлення #{order_id} від @{user.username or user.first_name} (ID: {user.id})\n\n"
     order_text += "\n".join(order_details)
     order_text += f"\n\n💳 Всього: {total_uah} UAH"
 
-    # Отправляем уведомление владельцам с кнопкой "Взять"
     keyboard = [
         [InlineKeyboardButton("✅ Взяти", callback_data=f"take_order_{user.id}")]
     ]
@@ -1001,11 +981,9 @@ async def pay_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
             "❌ На жаль, не вдалося обробити ваше замовлення. Спробуйте пізніше."
         )
 
-# --- ОСНОВНАЯ ФУНКЦИЯ ЗАПУСКА ---
 def main() -> None:
-    """Запускает бота."""
     logger.info("Инициализация приложения бота...")
-    
+
     if not BOT_TOKEN:
         logger.critical("BOT_TOKEN не установлен!")
         return
@@ -1014,26 +992,21 @@ def main() -> None:
         logger.critical("DATABASE_URL не установлен!")
         return
 
-    # Создаем Application
     application = Application.builder().token(BOT_TOKEN).build()
 
-    # Регистрируем обработчики команд
     application.add_handler(CommandHandler("start", start))
     application.add_handler(CommandHandler("help", help_command))
     application.add_handler(CommandHandler("order", order_command))
     application.add_handler(CommandHandler("question", question_command))
     application.add_handler(CommandHandler("channel", channel_command))
     application.add_handler(CommandHandler("stop", stop_conversation))
+    application.add_handler(CommandHandler("dialog", dialog_command))
     application.add_handler(CommandHandler("pay", pay_command))
-    # ... (добавьте остальные команды владельца: stats, chats, orders, questions, history, dialog, clear)
 
-    # Регистрируем обработчик callback-запросов
     application.add_handler(CallbackQueryHandler(button_handler))
 
-    # Регистрируем обработчик текстовых сообщений (должен быть последним)
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
 
-    # Запускаем бота
     logger.info("Бот запущен. Ожидание обновлений...")
     application.run_polling(allowed_updates=Update.ALL_TYPES)
 
