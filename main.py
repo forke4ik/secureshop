@@ -346,6 +346,33 @@ async def dialog_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         logger.error(f"Ошибка при начале ручного диалога: {e}")
         await update.message.reply_text("❌ Помилка при початку діалогу.")
 
+async def stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    logger.info(f"Вызов /stats пользователем {update.effective_user.id}")
+    owner_id = update.effective_user.id
+    if owner_id not in OWNER_IDS:
+        return
+
+    try:
+        with psycopg.connect(DATABASE_URL) as conn:
+            with conn.cursor(row_factory=dict_row) as cur:
+                cur.execute("SELECT COUNT(*) FROM users")
+                total_users = cur.fetchone()['count']
+                cur.execute("SELECT COUNT(*) FROM orders WHERE status = 'completed'")
+                completed_orders = cur.fetchone()['count']
+    except Exception as e:
+        logger.error(f"Ошибка получения статистики из БД: {e}")
+        total_users = len(users_db)
+        completed_orders = len([c for c in active_conversations.values() if c.get('type') == 'order'])
+
+    stats_message = (
+        f"📊 Статистика бота:\n"
+        f"👤 Усього користувачів: {total_users}\n"
+        f"🛒 Усього замовлень: {completed_orders}\n"
+        f"❓ Активних запитаннь: {len([c for c in active_conversations.values() if c.get('type') == 'question'])}\n"
+        f"👥 Активних чатів: {len(active_conversations)}"
+    )
+    await update.message.reply_text(stats_message)
+
 async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     query = update.callback_query
     await query.answer()
@@ -570,8 +597,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             )
 
             keyboard = [
-                [InlineKeyboardButton("✅ Оплачено (Карта)", callback_data="paid_card")],
-                [InlineKeyboardButton("✅ Оплачено (Крипта)", callback_data="paid_crypto")],
+                [InlineKeyboardButton("✅ Оплачено", callback_data="paid_card")],
                 [InlineKeyboardButton("❌ Скасувати", callback_data="cancel_payment")]
             ]
 
@@ -608,8 +634,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 
                 keyboard = [
                     [InlineKeyboardButton("🔗 Перейти до оплати", url=pay_url)],
-                    [InlineKeyboardButton("✅ Оплачено (Карта)", callback_data="paid_card")],
-                    [InlineKeyboardButton("✅ Оплачено (Крипта)", callback_data="paid_crypto")],
+                    [InlineKeyboardButton("✅ Оплачено", callback_data="paid_crypto")],
                     [InlineKeyboardButton("❌ Скасувати", callback_data="cancel_payment")]
                 ]
 
@@ -1013,7 +1038,7 @@ def main() -> None:
     if not BOT_TOKEN:
         logger.critical("BOT_TOKEN не установлен!")
         return
-
+        
     if not DATABASE_URL:
         logger.critical("DATABASE_URL не установлен!")
         return
@@ -1035,6 +1060,7 @@ def main() -> None:
     application.add_handler(CommandHandler("channel", channel_command))
     application.add_handler(CommandHandler("stop", stop_conversation))
     application.add_handler(CommandHandler("dialog", dialog_command))
+    application.add_handler(CommandHandler("stats", stats_command))
     application.add_handler(CommandHandler("pay", pay_command))
 
     application.add_handler(CallbackQueryHandler(button_handler))
@@ -1046,4 +1072,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-
