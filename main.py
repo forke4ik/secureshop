@@ -1,7 +1,6 @@
 # main.py
 import os
 import logging
-import asyncio
 import threading
 import requests
 import json
@@ -30,9 +29,8 @@ from telegram.ext import (
     filters,
     ContextTypes,
 )
-import psycopg
-from psycopg.rows import dict_row
-
+# Убедитесь, что db.py существует и содержит необходимые функции
+import db
 from config import (
     BOT_TOKEN,
     DATABASE_URL,
@@ -50,14 +48,8 @@ from pay_rules import (
     generate_pay_command_from_selection,
     generate_pay_command_from_digital_product,
 )
-from commands import (
-    stats,
-    export_users_json,
-    show_active_chats,
-    show_questions,
-    show_conversation_history,
-    clear_active_conversations_command,
-)
+# Предполагается, что commands.py содержит stats, export_users_json
+import commands
 
 logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", level=logging.INFO
@@ -71,9 +63,8 @@ bot_lock = threading.Lock()
 OWNER_IDS = [id for id in [OWNER_ID_1, OWNER_ID_2] if id is not None]
 NOWPAYMENTS_API_URL = "https://api.nowpayments.io/v1"
 
-users_db = {}
-active_conversations = {}
-owner_client_map = {}
+# Инициализируем БД при запуске
+db.init_db()
 
 PING_INTERVAL = 60 * 5
 WEBHOOK_URL = os.environ.get('RENDER_EXTERNAL_URL') or "http://localhost:10000"
@@ -151,7 +142,12 @@ def start_http_server(port):
     except Exception as e:
         logger.error(f"❌ Неожиданная ошибка HTTP сервера: {e}")
 
+# --- Функции для работы с пользователями ---
+# Временное хранилище пользователей (можно заменить на БД)
+users_db = {}
+
 def ensure_user_exists(user):
+    """Добавляет или обновляет информацию о пользователе."""
     try:
         if user.id not in users_db:
             logger.info(f"👤 Добавление нового пользователя: {user.id}")
@@ -164,10 +160,14 @@ def ensure_user_exists(user):
             'created_at': datetime.now(),
             'updated_at': datetime.now(),
         }
+        # Здесь можно сохранить в БД, если нужно
+        # db.save_user(user)
     except Exception as e:
         logger.error(f"Ошибка при добавлении/обновлении пользователя {user.id}: {e}")
 
+# --- Функции для работы с NOWPayments ---
 def create_nowpayments_invoice(amount_uah, order_id, product_name):
+    """Создает инвойс в NOWPayments."""
     logger.info(
         f"🧾 Создание инвойса NOWPayments: сумма {amount_uah} {PAYMENT_CURRENCY}, заказ {order_id}"
     )
@@ -203,7 +203,10 @@ def create_nowpayments_invoice(amount_uah, order_id, product_name):
         logger.error(f"🧾 Исключение при создании инвойса NOWPayments: {e}")
         return {"error": f"Исключение: {e}"}
 
+
+# --- Обработчики команд ---
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Обрабатывает команду /start."""
     logger.info(f"🚀 Вызов /start пользователем {update.effective_user.id}")
     user = update.effective_user
     ensure_user_exists(user)
@@ -211,9 +214,9 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if is_owner:
         keyboard = [
             [InlineKeyboardButton("📊 Статистика", callback_data="stats")],
-            [InlineKeyboardButton("👥 Активные чаты", callback_data="chats")],
-            [InlineKeyboardButton("🛍️ Заказы", callback_data="orders")],
-            [InlineKeyboardButton("❓ Вопросы", callback_data="questions")],
+            # [InlineKeyboardButton("👥 Активные чаты", callback_data="chats")], # Удалено
+            # [InlineKeyboardButton("🛍️ Заказы", callback_data="orders")], # Удалено
+            # [InlineKeyboardButton("❓ Вопросы", callback_data="questions")], # Удалено
         ]
         reply_markup = InlineKeyboardMarkup(keyboard)
         greeting = f"👋 Привіт, {user.first_name}!\nВи є власником цього бота."
@@ -230,6 +233,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         await update.message.reply_text(greeting, reply_markup=reply_markup)
 
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Обрабатывает команду /help."""
     logger.info(f"📖 Вызов /help пользователем {update.effective_user.id}")
     help_text = (
         "👋 Доброго дня! Я бот магазину SecureShop.\n"
@@ -242,12 +246,13 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         "/order - Зробити замовлення\n"
         "/question - Поставити запитання\n"
         "/channel - Наш головний канал\n"
-        "/stop - Завершити поточний діалог\n"
+        # "/stop - Завершити поточний діалог\n" # Удалено
         "Також ви можете відправити команду `/pay` з сайту для оформлення замовлення."
     )
     await update.message.reply_text(help_text)
 
 async def channel_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Обрабатывает команду /channel."""
     logger.info(f"📢 Вызов /channel пользователем {update.effective_user.id}")
     keyboard = [
         [InlineKeyboardButton("📢 Перейти в SecureShopUA", url="https://t.me/SecureShopUA")]
@@ -265,6 +270,7 @@ async def channel_command(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     await update.message.reply_text(message_text, reply_markup=reply_markup)
 
 async def order_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Обрабатывает команду /order."""
     logger.info(f"📦 Вызов /order пользователем {update.effective_user.id}")
     keyboard = [
         [InlineKeyboardButton("💳 Підписки", callback_data="order_subscriptions")],
@@ -276,93 +282,21 @@ async def order_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     )
 
 async def question_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Обрабатывает команду /question."""
     logger.info(f"❓ Вызов /question пользователем {update.effective_user.id}")
     user = update.effective_user
     ensure_user_exists(user)
     context.user_data["conversation_type"] = "question"
     await update.message.reply_text(
-        "📝 Напишіть ваше запитання. Я передам його засновнику магазину.\n"
-        "Щоб завершити цей діалог пізніше, використайте команду /stop."
+        "📝 Напишіть ваше запитання. Я передам його засновнику магазину."
+        # "\nЩоб завершити цей діалог пізніше, використайте команду /stop." # Удалено
     )
 
-async def stop_conversation(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    logger.info(f"⏹️ Вызов /stop пользователем {update.effective_user.id}")
-    user_id = update.effective_user.id
-    user_name = update.effective_user.first_name
-    if user_id in OWNER_IDS and user_id in owner_client_map:
-        client_id = owner_client_map[user_id]
-        if client_id in active_conversations:
-            del active_conversations[client_id]
-        del owner_client_map[user_id]
-        try:
-            await context.bot.send_message(chat_id=client_id, text="👤 Магазин завершив діалог.")
-        except Exception as e:
-            logger.error(f"Не удалось уведомить клиента {client_id}: {e}")
-            await update.message.reply_text("Не вдалося сповістити клієнта (можливо, він заблокував бота), але діалог було завершено з вашого боку.")
-        else:
-            await update.message.reply_text(f"Діалог з клієнтом завершено.")
-        return
-    if user_id in active_conversations:
-        owner_id = active_conversations[user_id].get("assigned_owner")
-        if owner_id and owner_id in owner_client_map:
-            del owner_client_map[owner_id]
-        del active_conversations[user_id]
-        try:
-            if owner_id:
-                await context.bot.send_message(chat_id=owner_id, text=f"Клієнт {user_name} завершив діалог.")
-        except Exception as e:
-            logger.error(f"Не удалось уведомить владельца {owner_id}: {e}")
-        await update.message.reply_text("Ваш діалог із магазином завершено.")
-    else:
-        await update.message.reply_text("У вас немає активного діалогу.")
+# --- Удалены команды /stop, /dialog, /chats, /questions, /history, /clear ---
 
-async def dialog_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    logger.info(f"💬 Вызов /dialog пользователем {update.effective_user.id}")
-    owner_id = update.effective_user.id
-    if owner_id not in OWNER_IDS:
-        return
-    if not context.args:
-        await update.message.reply_text("ℹ️ Использование: /dialog <user_id>")
-        return
-    try:
-        client_id = int(context.args[0])
-    except ValueError:
-        await update.message.reply_text("❌ Неверный формат ID. ID должно быть числом.")
-        return
-    if client_id in active_conversations:
-        await update.message.reply_text("❌ Этот клиент уже обслуживается.")
-        return
-    try:
-        client_info = users_db.get(client_id, {})
-    except Exception as e:
-        logger.error(f"Ошибка получения информации о пользователе {client_id}: {e}")
-        await update.message.reply_text("❌ Ошибка при получении информации о пользователе.")
-        return
-    if not client_info:
-        await update.message.reply_text("❌ Пользователь не найден.")
-        return
-    active_conversations[client_id] = {
-        "assigned_owner": owner_id,
-        "user_info": client_info,
-        "type": "manual_dialog",
-        "last_message": "Діалог розпочато вручну"
-    }
-    owner_client_map[owner_id] = client_id
-    try:
-        await context.bot.send_message(
-            chat_id=client_id,
-            text="👤 Представник магазину розпочав з вами діалог вручну.\n"
-                 "Для завершення діалогу використовуйте /stop."
-        )
-        await update.message.reply_text(
-            f"✅ Ви розпочали діалог з клієнтом {client_info.get('first_name', 'Невідомий')} (ID: {client_id}).\n"
-            "Тепер ви можете надсилати повідомлення цьому клієнту. Для завершення діалогу використовуйте /stop."
-        )
-    except Exception as e:
-        logger.error(f"Ошибка при начале ручного диалога: {e}")
-        await update.message.reply_text("❌ Помилка при початку діалогу.")
-
+# --- Обработчики Callback-запросов ---
 async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Обрабатывает нажатия на кнопки."""
     query = update.callback_query
     await query.answer()
     user = query.from_user
@@ -370,6 +304,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     ensure_user_exists(user)
     logger.info(f"🔘 Получен callback запрос: {query.data} от пользователя {user_id}")
     
+    # --- Навигация верхнего уровня ---
     if query.data == "order":
         keyboard = [
             [InlineKeyboardButton("💳 Підписки", callback_data="order_subscriptions")],
@@ -380,8 +315,8 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     elif query.data == "question":
         context.user_data["conversation_type"] = "question"
         await query.message.edit_text(
-            "📝 Напишіть ваше запитання. Я передам його засновнику магазину.\n"
-            "Щоб завершити цей діалог пізніше, використайте команду /stop."
+            "📝 Напишіть ваше запитання. Я передам його засновнику магазину."
+            # "\nЩоб завершити цей діалог пізніше, використайте команду /stop." # Удалено
         )
     elif query.data == "help":
         help_text = (
@@ -395,7 +330,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             "/order - Зробити замовлення\n"
             "/question - Поставити запитання\n"
             "/channel - Наш головний канал\n"
-            "/stop - Завершити поточний діалог\n"
+            # "/stop - Завершити поточний діалог\n" # Удалено
             "Також ви можете відправити команду `/pay` з сайту для оформлення замовлення."
         )
         await query.message.edit_text(help_text)
@@ -417,9 +352,9 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         if is_owner:
             keyboard = [
                 [InlineKeyboardButton("📊 Статистика", callback_data="stats")],
-                [InlineKeyboardButton("👥 Активные чаты", callback_data="chats")],
-                [InlineKeyboardButton("🛍️ Заказы", callback_data="orders")],
-                [InlineKeyboardButton("❓ Вопросы", callback_data="questions")],
+                # [InlineKeyboardButton("👥 Активные чаты", callback_data="chats")], # Удалено
+                # [InlineKeyboardButton("🛍️ Заказы", callback_data="orders")], # Удалено
+                # [InlineKeyboardButton("❓ Вопросы", callback_data="questions")], # Удалено
             ]
             reply_markup = InlineKeyboardMarkup(keyboard)
             greeting = f"👋 Привіт, {user.first_name}!\nВи є власником цього бота."
@@ -434,6 +369,8 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             reply_markup = InlineKeyboardMarkup(keyboard)
             greeting = f"👋 Привет, {user.first_name}!\nДобро пожаловать в SecureShop!"
             await query.message.edit_text(greeting, reply_markup=reply_markup)
+    
+    # --- Обработка подписок ---
     elif query.data == "order_subscriptions":
         keyboard = []
         for service_key, service_data in SUBSCRIPTIONS.items():
@@ -492,7 +429,8 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
                     'plan': service['plans'][plan_key]['name'],
                     'period': period,
                     'price': price,
-                    'command': command
+                    'command': command,
+                    'type': 'subscription' # Добавляем тип
                 }
                 message = (
                     f"🛍️ Ваше замовлення готове!\n"
@@ -511,6 +449,8 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         except (ValueError, IndexError) as e:
             logger.error(f"Ошибка обработки add_ callback: {e}")
             await query.message.edit_text("❌ Помилка обробки вибору періоду.")
+    
+    # --- Обработка оплаты КАРТОЙ ---
     elif query.data.startswith('pay_card_'):
         try:
             price_str = query.data.split('_')[2]
@@ -543,6 +483,8 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         except Exception as e:
             logger.error(f"Неожиданная ошибка при обработке оплаты картой: {e}")
             await query.message.edit_text("❌ Неожиданная помилка обробки оплати карткою.")
+    
+    # --- Обработка оплаты КРИПТОВАЛЮТОЙ ---
     elif query.data.startswith('pay_crypto_'):
         try:
             price_str = query.data.split('_')[2]
@@ -579,11 +521,14 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         except Exception as e:
             logger.error(f"Неожиданная ошибка при обработке оплаты криптовалютой: {e}")
             await query.message.edit_text("❌ Неожиданная помилка обробки оплати криптовалютою.")
+    
+    # --- Обработка нажатия кнопки "ОПЛАЧЕНО" (для подписок) ---
     elif query.data in ['paid_card', 'paid_crypto']:
         pending_order = context.user_data.get('pending_order')
-        if pending_order:
-            order_summary = (
-                f"🛍️ НОВЕ ЗАМОВЛЕННЯ #{pending_order['order_id']}\n"
+        if pending_order and pending_order.get('type') == 'subscription':
+            # --- Логика после оплаты подписки ---
+            order_summary_for_owner = (
+                f"🛍️ НОВЕ ЗАМОВЛЕННЯ (Підписка) #{pending_order['order_id']}\n"
                 f"👤 Клієнт: @{user.username or user.first_name} (ID: {user_id})\n"
                 f"📦 Деталі замовлення:\n"
                 f"▫️ Сервіс: {pending_order['service']}\n"
@@ -591,32 +536,93 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
                 f"▫️ Період: {pending_order['period']}\n"
                 f"▫️ Сума: {pending_order['price']} UAH\n"
                 f"💳 ЗАГАЛЬНА СУМА: {pending_order['price']} UAH\n"
-                f"Команда для підтвердження: <code>{pending_order['command']}</code>\n"
-                f"Натисніть '✅ Взяти', щоб обробити це замовлення."
+                f"Команда для підтвердження: <code>{pending_order['command']}</code>"
             )
-            keyboard = [
-                [InlineKeyboardButton("✅ Взяти", callback_data=f"take_order_{user_id}")]
-            ]
-            reply_markup = InlineKeyboardMarkup(keyboard)
+            
+            # Отправляем уведомление всем владельцам
             success = False
             for owner_id in OWNER_IDS:
                 try:
                     await context.bot.send_message(
                         chat_id=owner_id, 
-                        text=order_summary, 
-                        parse_mode='HTML',
-                        reply_markup=reply_markup
+                        text=order_summary_for_owner, 
+                        parse_mode='HTML'
                     )
                     success = True
                 except Exception as e:
                     logger.error(f"Не удалось отправить уведомление владельцу {owner_id}: {e}")
-            if success:
-                await query.message.edit_text("✅ Дякуємо за оплату! Ми зв'яжемося з вами найближчим часом для підтвердження замовлення.")
+            
+            # --- Отправляем сообщение клиенту ---
+            if user.username:
+                # У пользователя есть username, собираем анкету
+                await query.message.edit_text(
+                    "✅ Дякуємо за оплату! Для завершення замовлення, будь ласка, надішліть мені ваш логін та пароль для сервісу в наступному повідомленні."
+                )
+                # Устанавливаем флаг для ожидания данных
+                context.user_data['awaiting_subscription_data'] = True
+                context.user_data['subscription_order_details'] = pending_order
             else:
-                await query.message.edit_text("✅ Дякуємо за оплату! Виникла помилка при відправці сповіщення, але оплата прийнята.")
+                # У пользователя нет username, отправляем инструкцию и кнопку
+                support_message = (
+                    "✅ Дякуємо за оплату!\n"
+                    "Для завершення замовлення, будь ласка, зв'яжіться з нашою службою підтримки.\n"
+                    "Натисніть кнопку нижче, щоб перейти до чату з оператором."
+                )
+                support_keyboard = [
+                    [InlineKeyboardButton("💬 Зв'язатися з підтримкою", url="https://t.me/SecureSupport")]
+                ]
+                await query.message.edit_text(
+                    support_message,
+                    reply_markup=InlineKeyboardMarkup(support_keyboard)
+                )
+            
+            # Очищаем данные заказа из user_data
             context.user_data.pop('pending_order', None)
+            
+        elif pending_order and pending_order.get('type') == 'digital':
+             # --- Логика после оплаты цифрового товара ---
+             order_summary_for_owner = (
+                f"🛍️ НОВЕ ЗАМОВЛЕННЯ (Цифровий товар) #{pending_order['order_id']}\n"
+                f"👤 Клієнт: @{user.username or user.first_name} (ID: {user_id})\n"
+                f"📦 Деталі замовлення:\n"
+                f"▫️ Товар: {pending_order['plan']}\n"
+                f"▫️ Сума: {pending_order['price']} UAH\n"
+                f"💳 ЗАГАЛЬНА СУМА: {pending_order['price']} UAH\n"
+             )
+             # Отправляем уведомление всем владельцам
+             success = False
+             for owner_id in OWNER_IDS:
+                 try:
+                     await context.bot.send_message(chat_id=owner_id, text=order_summary_for_owner)
+                     success = True
+                 except Exception as e:
+                     logger.error(f"Не удалось отправить уведомление владельцу {owner_id}: {e}")
+            
+             # --- Отправляем сообщение клиенту ---
+             if user.username:
+                 # У пользователя есть username, сообщаем, что с ним свяжутся
+                 await query.message.edit_text(
+                     "✅ Дякуємо за оплату! Наш менеджер зв'яжеться з вами найближчим часом для передачі товару."
+                 )
+             else:
+                 # У пользователя нет username, предлагаем связаться
+                 support_message = (
+                     "✅ Дякуємо за оплату!\n"
+                     "Наш менеджер зв'яжеться з вами найближчим часом. Якщо цього не сталося, будь ласка, зв'яжіться з нами."
+                 )
+                 support_keyboard = [
+                     [InlineKeyboardButton("💬 Зв'язатися з підтримкою", url="https://t.me/SecureSupport")]
+                 ]
+                 await query.message.edit_text(
+                     support_message,
+                     reply_markup=InlineKeyboardMarkup(support_keyboard)
+                 )
+             # Очищаем данные заказа из user_data
+             context.user_data.pop('pending_order', None)
         else:
             await query.message.edit_text("ℹ️ Інформація про оплату вже оброблена або відсутня.")
+    
+    # --- Обработка нажатия кнопки "СКАСУВАТИ" оплату ---
     elif query.data == 'cancel_payment':
         pending_order = context.user_data.get('pending_order')
         if pending_order:
@@ -631,6 +637,8 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             context.user_data.pop('pending_order', None)
         else:
             await query.message.edit_text("❌ Оплата вже скасована або відсутня.")
+    
+    # --- Обработка цифровых товаров ---
     elif query.data == "order_digital":
         keyboard = [
             [InlineKeyboardButton("🎮 Discord Украшення", callback_data="digital_discord_decor")],
@@ -684,7 +692,8 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
                 'plan': product_data['name'],
                 'period': "1 шт",
                 'price': price,
-                'command': command
+                'command': command,
+                'type': 'digital' # Добавляем тип
             }
             message = (
                 f"🛍️ Ваше замовлення готове!\n"
@@ -700,185 +709,100 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             await query.message.edit_text(message, parse_mode='HTML', reply_markup=InlineKeyboardMarkup(keyboard))
         else:
             await query.message.edit_text("❌ Помилка: цифровий товар не знайдено.")
-    elif query.data.startswith('take_order_'):
-        try:
-            client_id = int(query.data.split('_')[-1])
-            owner_id = user_id
-            if client_id in active_conversations and active_conversations[client_id].get('assigned_owner'):
-                await query.answer("❌ Це замовлення вже обробляється іншим представником магазину.", show_alert=True)
-                return
-            client_info = users_db.get(client_id, {})
-            active_conversations[client_id] = {
-                'assigned_owner': owner_id,
-                'user_info': client_info,
-                'type': 'order',
-                'order_details': context.user_data.get('pending_order', {})
-            }
-            owner_client_map[owner_id] = client_id
-            try:
-                await context.bot.send_message(
-                    chat_id=client_id,
-                    text="✅ Ваше замовлення прийнято! Представник магазину зв'яжеться з вами найближчим часом.\n"
-                         "Для завершення діалогу використовуйте /stop."
-                )
-                await query.message.edit_text(
-                    f"✅ Ви взяли замовлення від клієнта {client_info.get('first_name', 'Невідомий')} (ID: {client_id}).\n"
-                    "Тепер ви можете надсилати повідомлення цьому клієнту. Для завершення діалогу використовуйте /stop."
-                )
-            except Exception as e:
-                logger.error(f"Ошибка при начале диалога: {e}")
-                await query.message.edit_text("❌ Помилка при початку діалогу.")
-        except (ValueError, IndexError) as e:
-            logger.error(f"Ошибка обработки take_order_: {e}")
-            await query.message.edit_text("❌ Помилка обробки запиту.")
-        except Exception as e:
-            logger.error(f"Неожиданная ошибка при обработке take_order_: {e}")
-            await query.message.edit_text("❌ Неожиданная помилка.")
-    elif query.data.startswith('take_question_'):
-        try:
-            client_id = int(query.data.split('_')[-1])
-            owner_id = user_id
-            if client_id in active_conversations and active_conversations[client_id].get('assigned_owner'):
-                await query.answer("❌ Цей клієнт вже обслуговується іншим представником магазину.", show_alert=True)
-                return
-            client_info = users_db.get(client_id, {})
-            active_conversations[client_id] = {
-                'assigned_owner': owner_id,
-                'user_info': client_info,
-                'type': 'question',
-                'order_details': {}
-            }
-            owner_client_map[owner_id] = client_id
-            try:
-                await context.bot.send_message(
-                    chat_id=client_id,
-                    text="✅ Представник магазину відповість на ваше запитання найближчим часом.\n"
-                         "Для завершення діалогу використовуйте /stop."
-                )
-                await query.message.edit_text(
-                    f"✅ Ви взяли запитання від клієнта {client_info.get('first_name', 'Невідомий')} (ID: {client_id}).\n"
-                    "Тепер ви можете надсилати повідомлення цьому клієнту. Для завершення діалогу використовуйте /stop."
-                )
-            except Exception as e:
-                logger.error(f"Ошибка при начале диалога по вопросу: {e}")
-                await query.message.edit_text("❌ Помилка при початку діалогу.")
-        except (ValueError, IndexError) as e:
-            logger.error(f"Ошибка обработки take_question_: {e}")
-            await query.message.edit_text("❌ Помилка обробки запиту.")
-        except Exception as e:
-            logger.error(f"Неожиданная ошибка при обработке take_question_: {e}")
-            await query.message.edit_text("❌ Неожиданная помилка.")
 
+    # --- Удалены callback-ы take_order_, take_question_, continue_chat_ ---
+
+# --- Обработчик текстовых сообщений ---
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Обрабатывает текстовые сообщения."""
     logger.info(f"📨 Получено текстовое сообщение от пользователя {update.effective_user.id}")
     user = update.effective_user
     user_id = user.id
     message_text = update.message.text
     ensure_user_exists(user)
+    
     is_owner = user_id in OWNER_IDS
-    if is_owner:
-        if user_id in owner_client_map:
-            client_id = owner_client_map[user_id]
-            try:
-                await context.bot.send_message(
-                    chat_id=client_id,
-                    text=f"📩 Відповідь від магазину:\n{message_text}",
-                )
-            except Exception as e:
-                logger.error(
-                    f"Ошибка при пересылке сообщения от владельца {user_id} клиенту {client_id}: {e}"
-                )
-                await update.message.reply_text(
-                    "❌ Помилка при надсиланні повідомлення клієнту. Можливо, клієнт заблокував бота."
-                )
-        else:
-            await update.message.reply_text(
-                "ℹ️ Ви не ведете діалог з жодним клієнтом. Очікуйте нове повідомлення або скористайсься командою /dialog."
+    # Владельцы больше не могут отправлять сообщения клиентам напрямую
+    # if is_owner:
+    #     # Логика для владельцев
+    #     return
+
+    # --- Обработка данных для подписки после оплаты ---
+    awaiting_data = context.user_data.get('awaiting_subscription_data', False)
+    if awaiting_data:
+        subscription_details = context.user_data.get('subscription_order_details', {})
+        if subscription_details:
+            # Формируем сообщение с данными для владельцев
+            data_message = (
+                f"🔐 Дані для замовлення (Підписка) #{subscription_details['order_id']} від @{user.username or user.first_name} (ID: {user_id}):\n"
+                f"📦 Сервіс: {subscription_details['service']}\n"
+                f"▫️ План: {subscription_details['plan']}\n"
+                f"▫️ Період: {subscription_details['period']}\n"
+                f"▫️ Сума: {subscription_details['price']} UAH\n"
+                f"🔑 Логін/Пароль:\n{message_text}"
             )
-        return
-    conversation_type = context.user_data.get('conversation_type')
-    if conversation_type == 'question':
-        # Проверяем, находится ли пользователь уже в активном диалоге
-        if user_id in active_conversations:
-            # Пользователь уже в диалоге, просто пересылаем сообщение владельцу
-            assigned_owner_id = active_conversations[user_id].get('assigned_owner')
-            if assigned_owner_id:
-                try:
-                    await context.bot.send_message(
-                        chat_id=assigned_owner_id,
-                        text=f"📩 Повідомлення від клієнта:\n{message_text}",
-                    )
-                    # Опционально: подтверждение клиенту
-                    # await update.message.reply_text("✅ Повідомлення надіслано представнику магазину.")
-                except Exception as e:
-                    logger.error(f"Ошибка пересылки сообщения от клиента {user_id} владельцу {assigned_owner_id}: {e}")
-                    await update.message.reply_text("❌ Помилка при надсиланні повідомлення. Спробуйте пізніше.")
-            else:
-                # Диалог активен, но владелец не назначен (редкий случай)
-                forward_message = (
-                    f"❓ Нове повідомлення в активному діалозі (власник не призначений):\n"
-                    f"👤 Клієнт: {user.first_name}\n"
-                    f"📱 Username: @{user.username if user.username else 'не вказано'}\n"
-                    f"🆔 ID: {user.id}\n"
-                    f"💬 Повідомлення:\n{message_text}"
-                )
-                keyboard = [[InlineKeyboardButton("✅ Відповісти", callback_data=f'take_question_{user_id}')]]
-                reply_markup = InlineKeyboardMarkup(keyboard)
-                success = False
-                for owner_id in OWNER_IDS:
-                    try:
-                        await context.bot.send_message(
-                            chat_id=owner_id,
-                            text=forward_message,
-                            reply_markup=reply_markup
-                        )
-                        success = True
-                    except Exception as e:
-                        logger.error(f"Не удалось отправить сообщение владельцу {owner_id}: {e}")
-                # if success: # Не отправляем подтверждение, так как диалог уже активен
-                #     await update.message.reply_text("✅ Повідомлення надіслано.")
-        else:
-            # Если пользователь НЕ в активном диалоге, создаем новый запрос
-            forward_message = (
-                f"❓ Нове запитання від клієнта:\n"
-                f"👤 Клієнт: {user.first_name}\n"
-                f"📱 Username: @{user.username if user.username else 'не вказано'}\n"
-                f"🆔 ID: {user.id}\n"
-                f"💬 Повідомлення:\n{message_text}"
-            )
-            keyboard = [[InlineKeyboardButton("✅ Відповісти", callback_data=f'take_question_{user_id}')]]
-            reply_markup = InlineKeyboardMarkup(keyboard)
+            # Отправляем владельцам
             success = False
             for owner_id in OWNER_IDS:
                 try:
-                    await context.bot.send_message(
-                        chat_id=owner_id,
-                        text=forward_message,
-                        reply_markup=reply_markup
-                    )
+                    await context.bot.send_message(chat_id=owner_id, text=data_message)
                     success = True
                 except Exception as e:
-                    logger.error(f"Не удалось отправить вопрос владельцу {owner_id}: {e}")
+                    logger.error(f"Не удалось отправить данные владельцу {owner_id}: {e}")
+            
             if success:
-                await update.message.reply_text("✅ Ваше запитання надіслано. Очікуйте відповіді.")
+                await update.message.reply_text("✅ Дякуємо! Дані отримано. Наш менеджер зв'яжеться з вами найближчим часом.")
             else:
-                await update.message.reply_text("❌ На жаль, не вдалося надіслати ваше запитання. Спробуйте пізніше.")
-        return
-    if user_id in active_conversations:
-        assigned_owner_id = active_conversations[user_id].get('assigned_owner')
-        if assigned_owner_id:
+                await update.message.reply_text("❌ Виникла помилка при відправці даних. Спробуйте ще раз пізніше або зв'яжіться з підтримкою.")
+            
+            # Очищаем флаги
+            context.user_data.pop('awaiting_subscription_data', None)
+            context.user_data.pop('subscription_order_details', None)
+            return # Завершаем обработку
+
+    # --- Обработка вопросов ---
+    conversation_type = context.user_data.get('conversation_type')
+    if conversation_type == 'question':
+        # Сохраняем вопрос в БД
+        try:
+            db.save_new_question(user_id, user, message_text)
+        except Exception as e:
+            logger.error(f"Ошибка сохранения вопроса в БД: {e}")
+        
+        forward_message = (
+            f"❓ Нове запитання від клієнта:\n"
+            f"👤 Клієнт: {user.first_name}\n"
+            f"📱 Username: @{user.username if user.username else 'не вказано'}\n"
+            f"🆔 ID: {user.id}\n"
+            f"💬 Повідомлення:\n{message_text}"
+        )
+        # Уведомляем всех владельцев
+        success = False
+        for owner_id in OWNER_IDS:
             try:
-                await context.bot.send_message(
-                    chat_id=assigned_owner_id,
-                    text=f"📩 Повідомлення від клієнта:\n{message_text}",
-                )
+                await context.bot.send_message(chat_id=owner_id, text=forward_message)
+                success = True
             except Exception as e:
-                logger.error(f"Ошибка пересылки сообщения от клиента {user_id} владельцу {assigned_owner_id}: {e}")
-                await update.message.reply_text("❌ Помилка при надсиланні повідомлення. Спробуйте пізніше.")
-            return
+                logger.error(f"Не удалось отправить вопрос владельцу {owner_id}: {e}")
+        if success:
+            await update.message.reply_text("✅ Ваше запитання надіслано. Очікуйте відповіді.")
+        else:
+            await update.message.reply_text("❌ На жаль, не вдалося надіслати ваше запитання. Спробуйте пізніше.")
+        # Не очищаем conversation_type, чтобы пользователь мог задать еще вопросы
+        return
+
+    # --- Обработка команды /pay ---
+    if message_text.startswith('/pay'):
+        await pay_command(update, context)
+        return
+
+    # --- Если ничего не подошло, предлагаем меню ---
     await start(update, context)
 
+
+# --- Обработчик команды /pay ---
 async def pay_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Обрабатывает команду /pay."""
     logger.info(f"💰 Вызов команды /pay пользователем {update.effective_user.id}")
     user = update.effective_user
     ensure_user_exists(user)
@@ -909,6 +833,7 @@ async def pay_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         'order_text': order_text
     }
 
+    # Отправляем уведомление владельцам (можно убрать, если не нужно дублировать)
     success = False
     for owner_id in OWNER_IDS:
         try:
@@ -917,8 +842,10 @@ async def pay_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         except Exception as e:
             logger.error(f"Не удалось отправить заказ владельцу {owner_id}: {e}")
 
+    # Создаем инвойс в NOWPayments
     invoice_data = create_nowpayments_invoice(total_uah, order_id, "Замовлення через /pay")
     
+    # Формируем сообщение и клавиатуру
     if invoice_data and 'invoice_url' in invoice_data:
         pay_url = invoice_data['invoice_url']
         payment_message = (
@@ -927,6 +854,7 @@ async def pay_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
             f"Оберіть спосіб оплати:"
         )
         
+        # Клавиатура с кнопками оплаты и "Оплачено"
         keyboard = [
             [InlineKeyboardButton("₿ Оплатити криптовалютою", url=pay_url)],
             [InlineKeyboardButton("💳 Оплатити карткою", callback_data=f"pay_card_from_command_{total_uah}")],
@@ -947,6 +875,7 @@ async def pay_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
             f"⚠️ Помилка створення посилання для оплати: {error_msg}\n"
             f"Ми зв'яжемося з вами найближчим часом для підтвердження."
         )
+        # Даже если инвойс не создан, показываем кнопки оплаты (кроме крипты) и "Оплачено"
         keyboard = [
             [InlineKeyboardButton("💳 Оплатити карткою", callback_data=f"pay_card_from_command_{total_uah}")],
             [InlineKeyboardButton("✅ Оплачено", callback_data='paid_after_command')],
@@ -957,45 +886,152 @@ async def pay_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
             reply_markup=InlineKeyboardMarkup(keyboard)
         )
 
+# --- Обработчики Callback-запросов для /pay ---
+# ... (весь остальной код button_handler остается без изменений до нужного места) ...
+
+    # --- Обработка оплаты КАРТОЙ из команды /pay ---
+    elif query.data.startswith('pay_card_from_command_'):
+        try:
+            # Извлекаем цену из callback_data, например, "pay_card_from_command_100" -> 100
+            price_str = query.data.split('_')[-1]
+            price = int(price_str)
+            
+            # Форматируем номер карты для копирования (используем Markdown)
+            formatted_card_number = f"`{CARD_NUMBER}`"
+            message = (
+                f"💳 Оплата карткою:\n"
+                f"Сума: {price} UAH\n"
+                f"Номер картки: {formatted_card_number}\n"
+                f"(Натисніть на номер, щоб скопіювати)\n"
+                f"Призначення платежу: Оплата замовлення #{context.user_data.get('pending_order_from_command', {}).get('order_id', 'N/A')}\n"
+                f"Після оплати натисніть кнопку нижче."
+            )
+            keyboard = [
+                [InlineKeyboardButton("✅ Оплачено", callback_data='paid_after_command')],
+                 [InlineKeyboardButton("❌ Скасувати", callback_data='cancel_payment_command')]
+            ]
+            await query.message.edit_text(
+                message, 
+                parse_mode='Markdown', # Важно для корректного отображения `номер карты`
+                reply_markup=InlineKeyboardMarkup(keyboard)
+            )
+        except (ValueError, IndexError) as e:
+            logger.error(f"Ошибка обработки оплаты картой из /pay: {e}")
+            await query.message.edit_text("❌ Помилка обробки оплати карткою.")
+        except Exception as e:
+            logger.error(f"Неожиданная ошибка при обработке оплаты картой из /pay: {e}")
+            await query.message.edit_text("❌ Неожиданная помилка обробки оплати карткою.")
+
+    # --- Обработка нажатия кнопки "ОПЛАЧЕНО" после команды /pay ---
+    elif query.data == 'paid_after_command':
+        # Получаем информацию о заказе из user_data
+        pending_order_data = context.user_data.get('pending_order_from_command')
+        if pending_order_data:
+            order_id = pending_order_data['order_id']
+            total_uah = pending_order_data['total_uah']
+            order_text = pending_order_data['order_text'] # Используем сохраненный текст
+            
+            # Формируем сообщение для владельцев
+            order_summary = (
+                f"🛍️ НОВЕ ЗАМОВЛЕННЯ #{order_id}\n"
+                f"👤 Клієнт: @{user.username or user.first_name} (ID: {user_id})\n"
+                f"{order_text}\n"
+                f"Команда для підтвердження: <code>/pay {order_id} {pending_order_data['items_str']}</code>"
+            )
+            
+            # Отправляем уведомление всем владельцам
+            success = False
+            for owner_id in OWNER_IDS:
+                try:
+                    await context.bot.send_message(
+                        chat_id=owner_id, 
+                        text=order_summary, 
+                        parse_mode='HTML' # Для корректного отображения <code>
+                    )
+                    success = True
+                except Exception as e:
+                    logger.error(f"Не удалось отправить уведомление владельцу {owner_id}: {e}")
+            
+            if success:
+                await query.message.edit_text("✅ Дякуємо за оплату! Ми зв'яжемося з вами найближчим часом для підтвердження замовлення.")
+            else:
+                await query.message.edit_text("✅ Дякуємо за оплату! Виникла помилка при відправці сповіщення, але оплата прийнята.")
+            
+            # Очищаем данные заказа из user_data
+            context.user_data.pop('pending_order_from_command', None)
+        else:
+            await query.message.edit_text("ℹ️ Інформація про оплату вже оброблена або відсутня.")
+
+    # --- Обработка нажатия кнопки "СКАСУВАТИ" оплату из команды /pay---
+    elif query.data == 'cancel_payment_command':
+         pending_order_data = context.user_data.get('pending_order_from_command')
+         if pending_order_
+             await query.message.edit_text(
+                 f"❌ Оплата скасована.\n"
+                 f"Номер замовлення: #{pending_order_data['order_id']}\n"
+                 f"Сума: {pending_order_data['total_uah']} UAH\n"
+                 f"Ви можете зробити нове замовлення через /start або повторно відправити команду /pay."
+             )
+             # Очищаем данные заказа
+             context.user_data.pop('pending_order_from_command', None)
+         else:
+             await query.message.edit_text("❌ Оплата вже скасована або відсутня.")
+
+
+# --- ОСНОВНАЯ ФУНКЦИЯ ЗАПУСКА ---
 def main() -> None:
+    """Главная функция запуска бота."""
     logger.info("🚀 Инициализация приложения бота...")
     if not BOT_TOKEN or BOT_TOKEN == "YOUR_BOT_TOKEN_HERE":
         logger.critical("🔑 BOT_TOKEN не установлен или имеет значение по умолчанию!")
         return
     if not DATABASE_URL or DATABASE_URL == "YOUR_DATABASE_URL_HERE":
         logger.warning("💾 DATABASE_URL не установлен или имеет значение по умолчанию! Используется временное хранилище.")
+    
     port = int(os.environ.get('PORT', 10000))
     http_thread = Thread(target=start_http_server, args=(port,), daemon=True)
     http_thread.start()
     logger.info(f"🌐 HTTP сервер запущен в потоке на порту {port}")
+    
     application = Application.builder().token(BOT_TOKEN).build()
+    
+    # --- Регистрация обработчиков команд ---
     application.add_handler(CommandHandler("start", start))
     application.add_handler(CommandHandler("help", help_command))
     application.add_handler(CommandHandler("order", order_command))
     application.add_handler(CommandHandler("question", question_command))
     application.add_handler(CommandHandler("channel", channel_command))
-    application.add_handler(CommandHandler("stop", stop_conversation))
-    application.add_handler(CommandHandler("dialog", dialog_command))
-    application.add_handler(CommandHandler("stats", stats))
-    application.add_handler(CommandHandler("json", export_users_json))
-    application.add_handler(CommandHandler("chats", show_active_chats))
-    application.add_handler(CommandHandler("questions", show_questions))
-    application.add_handler(CommandHandler("history", show_conversation_history))
-    application.add_handler(CommandHandler("clear", clear_active_conversations_command))
+    # application.add_handler(CommandHandler("stop", stop_conversation)) # Удалено
+    # application.add_handler(CommandHandler("dialog", dialog_command)) # Удалено
+    application.add_handler(CommandHandler("stats", commands.stats)) # Из commands.py
+    application.add_handler(CommandHandler("json", commands.export_users_json)) # Из commands.py
+    # application.add_handler(CommandHandler("chats", show_active_chats)) # Удалено
+    # application.add_handler(CommandHandler("questions", show_questions)) # Удалено
+    # application.add_handler(CommandHandler("history", show_conversation_history)) # Удалено
+    # application.add_handler(CommandHandler("clear", clear_active_conversations_command)) # Удалено
     application.add_handler(CommandHandler("pay", pay_command))
+    
+    # --- Регистрация обработчиков callback-запросов ---
     application.add_handler(CallbackQueryHandler(button_handler))
+    
+    # --- Регистрация обработчика текстовых сообщений ---
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
+    
+    # --- Обработчик сигналов завершения ---
     def signal_handler(signum, frame):
+        """Обработчик сигналов завершения (Ctrl+C, SIGTERM)."""
         logger.info("🛑 Принято сигнал завершения. Остановка бота...")
-        stop_ping_service()
-        sys.exit(0)
+        stop_ping_service() # Останавливаем пинговалку
+        sys.exit(0) # Завершаем программу
+    
     signal.signal(signal.SIGTERM, signal_handler)
     signal.signal(signal.SIGINT, signal_handler)
-    start_ping_service()
+    
+    # --- Запуск сервисов ---
+    start_ping_service() # Запускаем пинговалку
+    
     logger.info("🤖 Бот запущен. Нажмите Ctrl+C для остановки.")
     application.run_polling(allowed_updates=Update.ALL_TYPES)
 
 if __name__ == "__main__":
     main()
-
-
