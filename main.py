@@ -1107,7 +1107,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     ensure_user_exists(user)
     
     awaiting_data = context.user_data.get('awaiting_subscription_data', False)
-    if awaiting_
+    if awaiting_:
         subscription_details = context.user_data.get('subscription_order_details', {})
         if subscription_details:
             data_message = (
@@ -1316,4 +1316,5 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
+
 
