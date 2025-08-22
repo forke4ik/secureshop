@@ -1089,7 +1089,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     elif query.data == 'paid_after_command':
         # Отримуємо інформацію про замовлення з user_data
         pending_order_data = context.user_data.get('pending_order_from_command')
-        if pending_order_
+        if pending_order_:
             order_id = pending_order_data['order_id']
             total_uah = pending_order_data['total_uah']
             order_text = pending_order_data['order_text']
@@ -1135,7 +1135,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     # --- Обработка натискання кнопки "СКАСУВАТИ" оплату з команды /pay---
     elif query.data == 'cancel_payment_command':
         pending_order_data = context.user_data.get('pending_order_from_command')
-        if pending_order_
+        if pending_order_:
             await query.message.edit_text(
                 f"❌ Оплата скасована.\n"
                 f"Номер замовлення: #{pending_order_data['order_id']}\n"
@@ -1397,4 +1397,5 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
+
 
