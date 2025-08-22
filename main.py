@@ -29,12 +29,15 @@ from telegram.ext import (
     filters,
     ContextTypes,
 )
-import db
+import psycopg
+from psycopg.rows import dict_row
+
 from config import (
     BOT_TOKEN,
     DATABASE_URL,
     OWNER_ID_1,
     OWNER_ID_2,
+    SECURE_SUPPORT_ID, # Новый ID менеджера
     NOWPAYMENTS_API_KEY,
     NOWPAYMENTS_IPN_SECRET,
     PAYMENT_CURRENCY,
@@ -47,7 +50,6 @@ from pay_rules import (
     generate_pay_command_from_selection,
     generate_pay_command_from_digital_product,
 )
-import commands
 
 logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", level=logging.INFO
@@ -58,16 +60,196 @@ logger = logging.getLogger(__name__)
 
 bot_running = False
 bot_lock = threading.Lock()
-OWNER_ID_3 = int(os.environ.get('SECURE_SUPPORT_ID', 0))
-OWNER_IDS = [id for id in [OWNER_ID_1, OWNER_ID_2, OWNER_ID_3] if id is not None]
+# OWNER_IDS теперь содержит только владельцев, SECURE_SUPPORT_ID отдельно
+OWNER_IDS = [id for id in [OWNER_ID_1, OWNER_ID_2] if id is not None]
+MANAGER_ID = SECURE_SUPPORT_ID # ID менеджера для вопросов
 NOWPAYMENTS_API_URL = "https://api.nowpayments.io/v1"
-
-db.init_db()
 
 PING_INTERVAL = 60 * 5
 WEBHOOK_URL = os.environ.get('RENDER_EXTERNAL_URL') or "http://localhost:10000"
 ping_running = False
 ping_thread = None
+
+# Инициализация БД
+def init_db():
+    """Инициализирует базу данных."""
+    try:
+        with psycopg.connect(DATABASE_URL) as conn:
+            with conn.cursor() as cur:
+                # Создаем таблицу пользователей
+                cur.execute("""
+                    CREATE TABLE IF NOT EXISTS users (
+                        id BIGINT PRIMARY KEY,
+                        username VARCHAR(255),
+                        first_name VARCHAR(255),
+                        last_name VARCHAR(255),
+                        language_code VARCHAR(10),
+                        is_bot BOOLEAN,
+                        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                    );
+                """)
+                # Создаем таблицу статистики
+                cur.execute("""
+                    CREATE TABLE IF NOT EXISTS bot_stats (
+                        id SERIAL PRIMARY KEY,
+                        total_orders INTEGER DEFAULT 0,
+                        total_questions INTEGER DEFAULT 0,
+                        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                    );
+                """)
+                # Создаем таблицу активных диалогов (для вопросов)
+                cur.execute("""
+                    CREATE TABLE IF NOT EXISTS active_questions (
+                        id SERIAL PRIMARY KEY,
+                        user_id BIGINT REFERENCES users(id),
+                        message TEXT,
+                        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                    );
+                """)
+                # Создаем таблицу заказов
+                cur.execute("""
+                    CREATE TABLE IF NOT EXISTS orders (
+                        id SERIAL PRIMARY KEY,
+                        user_id BIGINT REFERENCES users(id),
+                        order_id VARCHAR(255),
+                        items TEXT,
+                        total_uah INTEGER,
+                        status VARCHAR(50) DEFAULT 'created',
+                        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                    );
+                """)
+                # Вставляем начальную запись статистики, если её нет
+                cur.execute("SELECT COUNT(*) FROM bot_stats")
+                if cur.fetchone()[0] == 0:
+                    cur.execute("INSERT INTO bot_stats (total_orders, total_questions) VALUES (0, 0)")
+                conn.commit()
+    except Exception as e:
+        logger.error(f"Ошибка инициализации базы данных: {e}")
+
+# Функции для работы со статистикой
+def get_stats():
+    """Получает статистику из БД."""
+    try:
+        with psycopg.connect(DATABASE_URL) as conn:
+            with conn.cursor(row_factory=dict_row) as cur:
+                cur.execute("SELECT total_orders, total_questions FROM bot_stats ORDER BY id DESC LIMIT 1")
+                return cur.fetchone()
+    except Exception as e:
+        logger.error(f"Ошибка получения статистики: {e}")
+        return {'total_orders': 0, 'total_questions': 0}
+
+def increment_orders():
+    """Увеличивает счетчик заказов."""
+    try:
+        with psycopg.connect(DATABASE_URL) as conn:
+            with conn.cursor() as cur:
+                cur.execute("UPDATE bot_stats SET total_orders = total_orders + 1, updated_at = NOW()")
+                conn.commit()
+    except Exception as e:
+        logger.error(f"Ошибка увеличения счетчика заказов: {e}")
+
+def increment_questions():
+    """Увеличивает счетчик вопросов."""
+    try:
+        with psycopg.connect(DATABASE_URL) as conn:
+            with conn.cursor() as cur:
+                cur.execute("UPDATE bot_stats SET total_questions = total_questions + 1, updated_at = NOW()")
+                conn.commit()
+    except Exception as e:
+        logger.error(f"Ошибка увеличения счетчика вопросов: {e}")
+
+# Функции для работы с пользователями
+def save_user(user):
+    """Сохраняет или обновляет информацию о пользователе в БД."""
+    try:
+        with psycopg.connect(DATABASE_URL) as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    INSERT INTO users (id, username, first_name, last_name, language_code, is_bot, created_at, updated_at)
+                    VALUES (%s, %s, %s, %s, %s, %s, NOW(), NOW())
+                    ON CONFLICT (id) DO UPDATE SET
+                        username = EXCLUDED.username,
+                        first_name = EXCLUDED.first_name,
+                        last_name = EXCLUDED.last_name,
+                        language_code = EXCLUDED.language_code,
+                        updated_at = NOW()
+                """, (user.id, user.username, user.first_name, user.last_name, user.language_code, user.is_bot))
+                conn.commit()
+    except Exception as e:
+        logger.error(f"Ошибка сохранения пользователя {user.id}: {e}")
+
+def get_total_users_count():
+    """Получает общее количество пользователей."""
+    try:
+        with psycopg.connect(DATABASE_URL) as conn:
+            with conn.cursor() as cur:
+                cur.execute("SELECT COUNT(*) FROM users")
+                return cur.fetchone()[0]
+    except Exception as e:
+        logger.error(f"Ошибка получения количества пользователей: {e}")
+        return 0
+
+def get_all_users():
+    """Получает всех пользователей."""
+    try:
+        with psycopg.connect(DATABASE_URL) as conn:
+            with conn.cursor(row_factory=dict_row) as cur:
+                cur.execute("SELECT * FROM users")
+                return cur.fetchall()
+    except Exception as e:
+        logger.error(f"Ошибка получения пользователей: {e}")
+        return []
+
+# Функции для работы с вопросами
+def save_question(user_id, message):
+    """Сохраняет вопрос в БД."""
+    try:
+        with psycopg.connect(DATABASE_URL) as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    INSERT INTO active_questions (user_id, message, created_at)
+                    VALUES (%s, %s, NOW())
+                """, (user_id, message))
+                conn.commit()
+    except Exception as e:
+        logger.error(f"Ошибка сохранения вопроса от {user_id}: {e}")
+
+def get_active_questions_count():
+    """Получает количество активных вопросов."""
+    try:
+        with psycopg.connect(DATABASE_URL) as conn:
+            with conn.cursor() as cur:
+                cur.execute("SELECT COUNT(*) FROM active_questions")
+                return cur.fetchone()[0]
+    except Exception as e:
+        logger.error(f"Ошибка получения количества активных вопросов: {e}")
+        return 0
+
+# Функции для работы с заказами
+def save_order(user_id, order_id, items, total_uah):
+    """Сохраняет заказ в БД."""
+    try:
+        with psycopg.connect(DATABASE_URL) as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    INSERT INTO orders (user_id, order_id, items, total_uah, status, created_at)
+                    VALUES (%s, %s, %s, %s, 'created', NOW())
+                """, (user_id, order_id, items, total_uah))
+                conn.commit()
+    except Exception as e:
+        logger.error(f"Ошибка сохранения заказа {order_id}: {e}")
+
+def get_orders_count():
+    """Получает количество заказов."""
+    try:
+        with psycopg.connect(DATABASE_URL) as conn:
+            with conn.cursor() as cur:
+                cur.execute("SELECT COUNT(*) FROM orders")
+                return cur.fetchone()[0]
+    except Exception as e:
+        logger.error(f"Ошибка получения количества заказов: {e}")
+        return 0
 
 def ping_loop():
     global ping_running
@@ -140,25 +322,15 @@ def start_http_server(port):
     except Exception as e:
         logger.error(f"❌ Неожиданная ошибка HTTP сервера: {e}")
 
-users_db = {}
-
 def ensure_user_exists(user):
+    """Добавляет или обновляет информацию о пользователе."""
     try:
-        if user.id not in users_db:
-            logger.info(f"👤 Добавление нового пользователя: {user.id}")
-        users_db[user.id] = {
-            'username': user.username,
-            'first_name': user.first_name,
-            'last_name': user.last_name,
-            'language_code': user.language_code,
-            'is_bot': user.is_bot,
-            'created_at': datetime.now(),
-            'updated_at': datetime.now(),
-        }
+        save_user(user)
     except Exception as e:
         logger.error(f"Ошибка при добавлении/обновлении пользователя {user.id}: {e}")
 
 def create_nowpayments_invoice(amount_uah, order_id, product_name):
+    """Создает инвойс в NOWPayments."""
     logger.info(
         f"🧾 Создание инвойса NOWPayments: сумма {amount_uah} {PAYMENT_CURRENCY}, заказ {order_id}"
     )
@@ -194,12 +366,14 @@ def create_nowpayments_invoice(amount_uah, order_id, product_name):
         logger.error(f"🧾 Исключение при создании инвойса NOWPayments: {e}")
         return {"error": f"Исключение: {e}"}
 
-
+# --- Обработчики команд ---
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Обрабатывает команду /start."""
     logger.info(f"🚀 Вызов /start пользователем {update.effective_user.id}")
     user = update.effective_user
     ensure_user_exists(user)
     is_owner = user.id in OWNER_IDS
+    
     if is_owner:
         keyboard = [
             [InlineKeyboardButton("📊 Статистика", callback_data="stats")],
@@ -219,6 +393,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         await update.message.reply_text(greeting, reply_markup=reply_markup)
 
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Обрабатывает команду /help."""
     logger.info(f"📖 Вызов /help пользователем {update.effective_user.id}")
     help_text = (
         "👋 Доброго дня! Я бот магазину SecureShop.\n"
@@ -236,6 +411,7 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     await update.message.reply_text(help_text)
 
 async def channel_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Обрабатывает команду /channel."""
     logger.info(f"📢 Вызов /channel пользователем {update.effective_user.id}")
     keyboard = [
         [InlineKeyboardButton("📢 Перейти в SecureShopUA", url="https://t.me/SecureShopUA")]
@@ -253,6 +429,7 @@ async def channel_command(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     await update.message.reply_text(message_text, reply_markup=reply_markup)
 
 async def order_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Обрабатывает команду /order."""
     logger.info(f"📦 Вызов /order пользователем {update.effective_user.id}")
     keyboard = [
         [InlineKeyboardButton("💳 Підписки", callback_data="order_subscriptions")],
@@ -264,15 +441,81 @@ async def order_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     )
 
 async def question_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Обрабатывает команду /question."""
     logger.info(f"❓ Вызов /question пользователем {update.effective_user.id}")
     user = update.effective_user
     ensure_user_exists(user)
     context.user_data["conversation_type"] = "question"
     await update.message.reply_text(
-        "📝 Напишіть ваше запитання. Я передам його засновнику магазину."
+        "📝 Напишіть ваше запитання. Я передам його менеджеру магазину."
     )
 
+async def stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Обрабатывает команду /stats."""
+    logger.info(f"📈 Вызов /stats пользователем {update.effective_user.id}")
+    owner_id = update.effective_user.id
+    if owner_id not in OWNER_IDS:
+        return
+
+    try:
+        stats = get_stats()
+        total_users_db = get_total_users_count()
+        active_questions_db = get_active_questions_count()
+        orders_db = get_orders_count()
+        
+        stats_message = (
+            f"📊 Статистика бота:\n"
+            f"👤 Усього користувачів (БД): {total_users_db}\n"
+            f"🛒 Усього замовлень (БД): {stats['total_orders']}\n"
+            f"❓ Усього запитаннь (БД): {stats['total_questions']}\n"
+            f"👥 Активних запитаннь (БД): {active_questions_db}\n"
+            f"📦 Усього записаних замовлень (БД): {orders_db}"
+        )
+        await update.message.reply_text(stats_message)
+    except Exception as e:
+        logger.error(f"Ошибка получения статистики из БД: {e}")
+        await update.message.reply_text("❌ Помилка при отриманні статистики з бази даних.")
+
+async def export_users_json(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Экспортирует список пользователей в JSON файл (для разработчиков)."""
+    logger.info(f"📁 Вызов /json пользователем {update.effective_user.id}")
+    owner_id = update.effective_user.id
+    if owner_id not in OWNER_IDS:
+        await update.message.reply_text("❌ У вас немає доступу до цієї команди.")
+        return
+
+    try:
+        users_data_db = get_all_users()
+        if not users_data_db:
+             await update.message.reply_text("ℹ️ В базі даних немає користувачів для експорту.")
+             return
+
+        import io
+        users_data = []
+        for user in users_data_db:
+            users_data.append({
+                'id': user['id'],
+                'username': user['username'],
+                'first_name': user['first_name'],
+                'last_name': user['last_name'],
+                'language_code': user['language_code'],
+                'is_bot': user['is_bot'],
+                'created_at': user['created_at'].isoformat() if user['created_at'] else None,
+                'updated_at': user['updated_at'].isoformat() if user['updated_at'] else None
+            })
+
+        json_data = json.dumps(users_data, ensure_ascii=False, indent=2).encode('utf-8')
+        file = io.BytesIO(json_data)
+        file.seek(0)
+        file.name = 'users_export.json'
+        await update.message.reply_document(document=file, caption="📊 Експорт усіх користувачів у JSON")
+    except Exception as e:
+        logger.error(f"Ошибка экспорта пользователей в JSON: {e}")
+        await update.message.reply_text("❌ Помилка при експорті користувачів у JSON.")
+
+# --- Обработчики Callback-запросов ---
 async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Обрабатывает нажатия на кнопки."""
     query = update.callback_query
     await query.answer()
     user = query.from_user
@@ -280,6 +523,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     ensure_user_exists(user)
     logger.info(f"🔘 Получен callback запрос: {query.data} от пользователя {user_id}")
     
+    # --- Навигация верхнего уровня ---
     if query.data == "order":
         keyboard = [
             [InlineKeyboardButton("💳 Підписки", callback_data="order_subscriptions")],
@@ -290,7 +534,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     elif query.data == "question":
         context.user_data["conversation_type"] = "question"
         await query.message.edit_text(
-            "📝 Напишіть ваше запитання. Я передам його засновнику магазину."
+            "📝 Напишіть ваше запитання. Я передам його менеджеру магазину."
         )
     elif query.data == "help":
         help_text = (
@@ -340,6 +584,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             greeting = f"👋 Привет, {user.first_name}!\nДобро пожаловать в SecureShop!"
             await query.message.edit_text(greeting, reply_markup=reply_markup)
     
+    # --- Обработка подписок ---
     elif query.data == "order_subscriptions":
         keyboard = []
         for service_key, service_data in SUBSCRIPTIONS.items():
@@ -419,6 +664,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             logger.error(f"Ошибка обработки add_ callback: {e}")
             await query.message.edit_text("❌ Помилка обробки вибору періоду.")
     
+    # --- Обработка оплаты КАРТОЙ ---
     elif query.data.startswith('pay_card_'):
         try:
             price_str = query.data.split('_')[2]
@@ -452,6 +698,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             logger.error(f"Неожиданная ошибка при обработке оплаты картой: {e}")
             await query.message.edit_text("❌ Неожиданная помилка обробки оплати карткою.")
     
+    # --- Обработка оплаты КРИПТОВАЛЮТОЙ ---
     elif query.data.startswith('pay_crypto_'):
         try:
             price_str = query.data.split('_')[2]
@@ -489,9 +736,19 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             logger.error(f"Неожиданная ошибка при обработке оплаты криптовалютой: {e}")
             await query.message.edit_text("❌ Неожиданная помилка обробки оплати криптовалютою.")
     
+    # --- Обработка нажатия кнопки "ОПЛАЧЕНО" (для подписок) ---
     elif query.data in ['paid_card', 'paid_crypto']:
         pending_order = context.user_data.get('pending_order')
         if pending_order and pending_order.get('type') == 'subscription':
+            # Сохраняем заказ в БД
+            try:
+                items_str = f"{pending_order['service']} {pending_order['plan']} ({pending_order['period']}) - {pending_order['price']} UAH"
+                save_order(user_id, pending_order['order_id'], items_str, pending_order['price'])
+                increment_orders() # Увеличиваем счетчик заказов
+            except Exception as e:
+                logger.error(f"Ошибка сохранения заказа: {e}")
+            
+            # --- Логика после оплаты подписки ---
             order_summary_for_owner = (
                 f"🛍️ НОВЕ ЗАМОВЛЕННЯ (Підписка) #{pending_order['order_id']}\n"
                 f"👤 Клієнт: @{user.username or user.first_name} (ID: {user_id})\n"
@@ -504,6 +761,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
                 f"Команда для підтвердження: <code>{pending_order['command']}</code>"
             )
             
+            # Отправляем уведомление всем владельцам
             success = False
             for owner_id in OWNER_IDS:
                 try:
@@ -516,13 +774,17 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
                 except Exception as e:
                     logger.error(f"Не удалось отправить уведомление владельцу {owner_id}: {e}")
             
+            # --- Отправляем сообщение клиенту ---
             if user.username:
+                # У пользователя есть username, собираем анкету
                 await query.message.edit_text(
                     "✅ Дякуємо за оплату! Для завершення замовлення, будь ласка, надішліть мені ваш логін та пароль для сервісу в наступному повідомленні."
                 )
+                # Устанавливаем флаг для ожидания данных
                 context.user_data['awaiting_subscription_data'] = True
                 context.user_data['subscription_order_details'] = pending_order
             else:
+                # У пользователя нет username, отправляем инструкцию и кнопку
                 support_message = (
                     "✅ Дякуємо за оплату!\n"
                     "Для завершення замовлення, будь ласка, зв'яжіться з нашою службою підтримки.\n"
@@ -536,9 +798,19 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
                     reply_markup=InlineKeyboardMarkup(support_keyboard)
                 )
             
+            # Очищаем данные заказа из user_data
             context.user_data.pop('pending_order', None)
             
         elif pending_order and pending_order.get('type') == 'digital':
+             # Сохраняем заказ в БД
+             try:
+                items_str = f"{pending_order['plan']} - {pending_order['price']} UAH"
+                save_order(user_id, pending_order['order_id'], items_str, pending_order['price'])
+                increment_orders() # Увеличиваем счетчик заказов
+             except Exception as e:
+                logger.error(f"Ошибка сохранения цифрового заказа: {e}")
+                
+             # --- Логика после оплаты цифрового товара ---
              order_summary_for_owner = (
                 f"🛍️ НОВЕ ЗАМОВЛЕННЯ (Цифровий товар) #{pending_order['order_id']}\n"
                 f"👤 Клієнт: @{user.username or user.first_name} (ID: {user_id})\n"
@@ -547,6 +819,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
                 f"▫️ Сума: {pending_order['price']} UAH\n"
                 f"💳 ЗАГАЛЬНА СУМА: {pending_order['price']} UAH\n"
              )
+             # Отправляем уведомление всем владельцам
              success = False
              for owner_id in OWNER_IDS:
                  try:
@@ -555,11 +828,14 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
                  except Exception as e:
                      logger.error(f"Не удалось отправить уведомление владельцу {owner_id}: {e}")
             
+             # --- Отправляем сообщение клиенту ---
              if user.username:
+                 # У пользователя есть username, сообщаем, что с ним свяжутся
                  await query.message.edit_text(
                      "✅ Дякуємо за оплату! Наш менеджер зв'яжеться з вами найближчим часом для передачі товару."
                  )
              else:
+                 # У пользователя нет username, предлагаем связаться
                  support_message = (
                      "✅ Дякуємо за оплату!\n"
                      "Наш менеджер зв'яжеться з вами найближчим часом. Якщо цього не сталося, будь ласка, зв'яжіться з нами."
@@ -571,10 +847,12 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
                      support_message,
                      reply_markup=InlineKeyboardMarkup(support_keyboard)
                  )
+             # Очищаем данные заказа из user_data
              context.user_data.pop('pending_order', None)
         else:
             await query.message.edit_text("ℹ️ Інформація про оплату вже оброблена або відсутня.")
     
+    # --- Обработка нажатия кнопки "СКАСУВАТИ" оплату ---
     elif query.data == 'cancel_payment':
         pending_order = context.user_data.get('pending_order')
         if pending_order:
@@ -590,6 +868,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         else:
             await query.message.edit_text("❌ Оплата вже скасована або відсутня.")
     
+    # --- Обработка цифровых товаров ---
     elif query.data == "order_digital":
         keyboard = [
             [InlineKeyboardButton("🎮 Discord Украшення", callback_data="digital_discord_decor")],
@@ -661,6 +940,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         else:
             await query.message.edit_text("❌ Помилка: цифровий товар не знайдено.")
 
+    # --- Обработка оплаты КАРТОЙ из команды /pay ---
     elif query.data.startswith('pay_card_from_command_'):
         try:
             price_str = query.data.split('_')[-1]
@@ -690,13 +970,23 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             logger.error(f"Неочікувана помилка при обробці оплати карткою з /pay: {e}")
             await query.message.edit_text("❌ Неочікувана помилка обробки оплати карткою.")
 
+    # --- Обработка натискання кнопки "ОПЛАЧЕНО" після команди /pay ---
     elif query.data == 'paid_after_command':
+        # Отримуємо інформацію про замовлення з user_data
         pending_order_data = context.user_data.get('pending_order_from_command')
-        if pending_order_:
+        if pending_order_data:
             order_id = pending_order_data['order_id']
             total_uah = pending_order_data['total_uah']
             order_text = pending_order_data['order_text']
+            
+            # Сохраняем заказ в БД
+            try:
+                save_order(user_id, order_id, order_text, total_uah)
+                increment_orders() # Увеличиваем счетчик заказов
+            except Exception as e:
+                logger.error(f"Ошибка сохранения заказа из /pay: {e}")
 
+            # Формуємо повідомлення для власників
             order_summary = (
                 f"🛍️ НОВЕ ЗАМОВЛЕННЯ #{order_id}\n"
                 f"👤 Клієнт: @{user.username or user.first_name} (ID: {user_id})\n"
@@ -704,6 +994,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
                 f"Команда для підтвердження: <code>/pay {order_id} {pending_order_data['items_str']}</code>"
             )
 
+            # Відправляємо повідомлення всім власникам
             success = False
             for owner_id in OWNER_IDS:
                 try:
@@ -721,36 +1012,41 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             else:
                 await query.message.edit_text("✅ Дякуємо за оплату! Виникла помилка при відправці сповіщення, але оплата прийнята.")
 
+            # Очищуємо дані замовлення з user_data
             context.user_data.pop('pending_order_from_command', None)
         else:
             await query.message.edit_text("ℹ️ Інформація про оплату вже оброблена або відсутня.")
 
+    # --- Обробка натискання кнопки "СКАСУВАТИ" оплату з команди /pay---
     elif query.data == 'cancel_payment_command':
         pending_order_data = context.user_data.get('pending_order_from_command')
-        if pending_order_:
+        if pending_order_data:
             await query.message.edit_text(
                 f"❌ Оплата скасована.\n"
                 f"Номер замовлення: #{pending_order_data['order_id']}\n"
                 f"Сума: {pending_order_data['total_uah']} UAH\n"
                 f"Ви можете зробити нове замовлення через /start або повторно відправити команду /pay."
             )
+            # Очищуємо дані замовлення
             context.user_data.pop('pending_order_from_command', None)
         else:
             await query.message.edit_text("❌ Оплата вже скасована або відсутня.")
 
+# --- Обработчик текстовых сообщений ---
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Обрабатывает текстовые сообщения."""
     logger.info(f"📨 Получено текстовое сообщение от пользователя {update.effective_user.id}")
     user = update.effective_user
     user_id = user.id
     message_text = update.message.text
     ensure_user_exists(user)
     
-    is_owner = user_id in OWNER_IDS
-
+    # --- Обработка данных для подписки после оплаты ---
     awaiting_data = context.user_data.get('awaiting_subscription_data', False)
-    if awaiting_:
+    if awaiting_data:
         subscription_details = context.user_data.get('subscription_order_details', {})
         if subscription_details:
+            # Формируем сообщение с данными для владельцев
             data_message = (
                 f"🔐 Дані для замовлення (Підписка) #{subscription_details['order_id']} від @{user.username or user.first_name} (ID: {user_id}):\n"
                 f"📦 Сервіс: {subscription_details['service']}\n"
@@ -759,6 +1055,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
                 f"▫️ Сума: {subscription_details['price']} UAH\n"
                 f"🔑 Логін/Пароль:\n{message_text}"
             )
+            # Отправляем владельцам
             success = False
             for owner_id in OWNER_IDS:
                 try:
@@ -772,14 +1069,18 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             else:
                 await update.message.reply_text("❌ Виникла помилка при відправці даних. Спробуйте ще раз пізніше або зв'яжіться з підтримкою.")
             
+            # Очищаем флаги
             context.user_data.pop('awaiting_subscription_data', None)
             context.user_data.pop('subscription_order_details', None)
-            return
+            return # Завершаем обработку
 
+    # --- Обработка вопросов ---
     conversation_type = context.user_data.get('conversation_type')
     if conversation_type == 'question':
+        # Сохраняем вопрос в БД
         try:
-            db.save_new_question(user_id, user, message_text)
+            save_question(user_id, message_text)
+            increment_questions() # Увеличиваем счетчик вопросов
         except Exception as e:
             logger.error(f"Ошибка сохранения вопроса в БД: {e}")
         
@@ -790,27 +1091,26 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             f"🆔 ID: {user.id}\n"
             f"💬 Повідомлення:\n{message_text}"
         )
-        success = False
-        for owner_id in OWNER_IDS:
-            try:
-                await context.bot.send_message(chat_id=owner_id, text=forward_message)
-                success = True
-            except Exception as e:
-                logger.error(f"Не удалось отправить вопрос владельцу {owner_id}: {e}")
-        if success:
-            await update.message.reply_text("✅ Ваше запитання надіслано. Очікуйте відповіді.")
-        else:
+        # Отправляем вопрос менеджеру
+        try:
+            await context.bot.send_message(chat_id=MANAGER_ID, text=forward_message)
+            await update.message.reply_text("✅ Ваше запитання надіслано. Очікуйте відповіді від менеджера.")
+        except Exception as e:
+            logger.error(f"Не удалось отправить вопрос менеджеру {MANAGER_ID}: {e}")
             await update.message.reply_text("❌ На жаль, не вдалося надіслати ваше запитання. Спробуйте пізніше.")
         return
 
+    # --- Обработка команды /pay ---
     if message_text.startswith('/pay'):
         await pay_command(update, context)
         return
 
+    # --- Если ничего не подошло, предлагаем меню ---
     await start(update, context)
 
-
+# --- Обработчик команды /pay ---
 async def pay_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Обрабатывает команду /pay."""
     logger.info(f"💰 Вызов команды /pay пользователем {update.effective_user.id}")
     user = update.effective_user
     ensure_user_exists(user)
@@ -841,6 +1141,7 @@ async def pay_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         'order_text': order_text
     }
 
+    # Отправляем уведомление владельцам (можно убрать, если не нужно дублировать)
     success = False
     for owner_id in OWNER_IDS:
         try:
@@ -849,9 +1150,11 @@ async def pay_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         except Exception as e:
             logger.error(f"Не удалось отправить заказ владельцу {owner_id}: {e}")
 
+    # Создаем инвойс в NOWPayments
     invoice_data = create_nowpayments_invoice(total_uah, order_id, "Замовлення через /pay")
     
-    if invoice_data and 'invoice_url' in invoice_:
+    # Формируем сообщение и клавиатуру
+    if invoice_data and 'invoice_url' in invoice_data:
         pay_url = invoice_data['invoice_url']
         payment_message = (
             f"✅ Дякуємо за замовлення #{order_id}!\n"
@@ -859,6 +1162,7 @@ async def pay_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
             f"Оберіть спосіб оплати:"
         )
         
+        # Клавиатура с кнопками оплаты и "Оплачено"
         keyboard = [
             [InlineKeyboardButton("₿ Оплатити криптовалютою", url=pay_url)],
             [InlineKeyboardButton("💳 Оплатити карткою", callback_data=f"pay_card_from_command_{total_uah}")],
@@ -879,6 +1183,7 @@ async def pay_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
             f"⚠️ Помилка створення посилання для оплати: {error_msg}\n"
             f"Ми зв'яжемося з вами найближчим часом для підтвердження."
         )
+        # Даже если инвойс не создан, показываем кнопки оплаты (кроме крипты) и "Оплачено"
         keyboard = [
             [InlineKeyboardButton("💳 Оплатити карткою", callback_data=f"pay_card_from_command_{total_uah}")],
             [InlineKeyboardButton("✅ Оплачено", callback_data='paid_after_command')],
@@ -889,13 +1194,19 @@ async def pay_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
             reply_markup=InlineKeyboardMarkup(keyboard)
         )
 
+# --- ОСНОВНАЯ ФУНКЦИЯ ЗАПУСКА ---
 def main() -> None:
+    """Главная функция запуска бота."""
     logger.info("🚀 Инициализация приложения бота...")
     if not BOT_TOKEN or BOT_TOKEN == "YOUR_BOT_TOKEN_HERE":
         logger.critical("🔑 BOT_TOKEN не установлен или имеет значение по умолчанию!")
         return
     if not DATABASE_URL or DATABASE_URL == "YOUR_DATABASE_URL_HERE":
-        logger.warning("💾 DATABASE_URL не установлен или имеет значение по умолчанию! Используется временное хранилище.")
+        logger.critical("💾 DATABASE_URL не установлен или имеет значение по умолчанию!")
+        return
+    
+    # Инициализируем БД
+    init_db()
     
     port = int(os.environ.get('PORT', 10000))
     http_thread = Thread(target=start_http_server, args=(port,), daemon=True)
@@ -904,36 +1215,66 @@ def main() -> None:
     
     application = Application.builder().token(BOT_TOKEN).build()
     
+    # --- Регистрация обработчиков команд ---
     application.add_handler(CommandHandler("start", start))
     application.add_handler(CommandHandler("help", help_command))
     application.add_handler(CommandHandler("order", order_command))
     application.add_handler(CommandHandler("question", question_command))
     application.add_handler(CommandHandler("channel", channel_command))
-    application.add_handler(CommandHandler("stats", commands.stats))
-    application.add_handler(CommandHandler("json", commands.export_users_json))
+    application.add_handler(CommandHandler("stats", stats_command))
+    application.add_handler(CommandHandler("json", export_users_json)) # Новая команда для разработчиков
     application.add_handler(CommandHandler("pay", pay_command))
     
+    # --- Регистрация обработчиков callback-запросов ---
     application.add_handler(CallbackQueryHandler(button_handler))
     
+    # --- Регистрация обработчика текстовых сообщений ---
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
     
+    # --- Установка команд меню ---
+    async def set_commands_menu(application):
+        # Команды для обычных пользователей
+        user_commands = [
+            BotCommand("start", "Головне меню"),
+            BotCommand("help", "Допомога та інформація"),
+            BotCommand("order", "Зробити замовлення"),
+            BotCommand("question", "Поставити запитання"),
+            BotCommand("channel", "Наш головний канал"),
+        ]
+        
+        # Команды для владельцев
+        owner_commands = user_commands + [
+            BotCommand("stats", "Статистика бота"),
+            BotCommand("json", "Експорт користувачів у JSON (для розробників)"),
+        ]
+        
+        try:
+            # Устанавливаем команды для обычных пользователей
+            await application.bot.set_my_commands(user_commands)
+            # Устанавливаем команды для владельцев
+            for owner_id in OWNER_IDS:
+                await application.bot.set_my_commands(owner_commands, scope=BotCommandScopeChat(owner_id))
+        except Exception as e:
+            logger.error(f"Ошибка установки команд меню: {e}")
+
+    # --- Обработчик сигналов завершения ---
     def signal_handler(signum, frame):
+        """Обработчик сигналов завершения (Ctrl+C, SIGTERM)."""
         logger.info("🛑 Принято сигнал завершения. Остановка бота...")
-        stop_ping_service()
+        stop_ping_service() # Останавливаем пинговалку
         sys.exit(0)
     
     signal.signal(signal.SIGTERM, signal_handler)
     signal.signal(signal.SIGINT, signal_handler)
     
-    start_ping_service()
+    # --- Запуск сервисов ---
+    start_ping_service() # Запускаем пинговалку
+    
+    # Устанавливаем команды меню
+    application.post_init = set_commands_menu
     
     logger.info("🤖 Бот запущен. Нажмите Ctrl+C для остановки.")
     application.run_polling(allowed_updates=Update.ALL_TYPES)
 
 if __name__ == "__main__":
     main()
-
-
-
-
-
