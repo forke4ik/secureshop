@@ -814,7 +814,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             logger.info(f"Результат создания инвойса: {invoice_data}")
             
             # Проверяем, успешно ли создан инвойс и содержит ли он URL
-            if invoice_data and isinstance(invoice_data, dict) and 'invoice_url' in invoice_:
+            if invoice_data and isinstance(invoice_data, dict) and 'invoice_url' in invoice_data:
                 pay_url = invoice_data['invoice_url']
                 logger.info(f"Извлеченный pay_url: {pay_url}")
                 message = (
@@ -1397,6 +1397,7 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
+
 
 
 
