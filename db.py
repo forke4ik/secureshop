@@ -6,14 +6,49 @@ from config import DATABASE_URL
 
 logger = logging.getLogger(__name__)
 
-# --- Инициализация БД ---
-# (Эта функция, вероятно, уже есть в вашем коде)
 def init_db():
-    # ... ваш код инициализации ...
-    pass
+    """Инициализирует базу данных."""
+    try:
+        with psycopg.connect(DATABASE_URL) as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    CREATE TABLE IF NOT EXISTS users (
+                        id BIGINT PRIMARY KEY,
+                        username VARCHAR(255),
+                        first_name VARCHAR(255),
+                        last_name VARCHAR(255),
+                        language_code VARCHAR(10),
+                        is_bot BOOLEAN,
+                        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                    );
+                """)
+                cur.execute("""
+                    CREATE TABLE IF NOT EXISTS active_conversations (
+                        id SERIAL PRIMARY KEY,
+                        user_id BIGINT REFERENCES users(id),
+                        type VARCHAR(20),
+                        assigned_owner BIGINT,
+                        last_message TEXT,
+                        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                    );
+                """)
+                cur.execute("""
+                    CREATE TABLE IF NOT EXISTS messages (
+                        id SERIAL PRIMARY KEY,
+                        user_id BIGINT REFERENCES users(id),
+                        message TEXT,
+                        is_from_user BOOLEAN,
+                        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                    );
+                """)
+                conn.commit()
+    except Exception as e:
+        logger.error(f"Ошибка инициализации базы данных: {e}")
 
-# --- Функции для работы с пользователями ---
 def get_total_users_count():
+    """Получает общее количество пользователей."""
     try:
         with psycopg.connect(DATABASE_URL) as conn:
             with conn.cursor() as cur:
@@ -25,6 +60,7 @@ def get_total_users_count():
         return 0
 
 def get_all_users_data():
+    """Получает данные всех пользователей."""
     try:
         with psycopg.connect(DATABASE_URL) as conn:
             with conn.cursor(row_factory=dict_row) as cur:
@@ -35,47 +71,20 @@ def get_all_users_data():
         logger.error(f"Ошибка получения данных всех пользователей: {e}")
         return []
 
-def get_user_info(user_id):
-     try:
-        with psycopg.connect(DATABASE_URL) as conn:
-            with conn.cursor(row_factory=dict_row) as cur:
-                cur.execute("SELECT * FROM users WHERE id = %s", (user_id,))
-                user = cur.fetchone()
-                return user
-     except Exception as e:
-        logger.error(f"Ошибка получения информации о пользователе {user_id}: {e}")
-        return None
-
-# --- Функции для работы с активными диалогами ---
-def get_active_conversations_count():
-    try:
-        with psycopg.connect(DATABASE_URL) as conn:
-            with conn.cursor() as cur:
-                cur.execute("SELECT COUNT(*) FROM active_conversations")
-                count = cur.fetchone()[0]
-                return count
-    except Exception as e:
-        logger.error(f"Ошибка получения количества активных диалогов: {e}")
-        return 0
-
-def get_all_active_conversations():
+def get_active_conversations():
+    """Получает все активные диалоги."""
     try:
         with psycopg.connect(DATABASE_URL) as conn:
             with conn.cursor(row_factory=dict_row) as cur:
-                # Предполагается, что в таблице active_conversations есть поля: user_id, type, assigned_owner
                 cur.execute("SELECT * FROM active_conversations")
                 conversations = cur.fetchall()
-                # Здесь может потребоваться дополнительная логика для получения user_info
-                # Например, сделать отдельный запрос или join с таблицей users
-                # Для простоты предположим, что user_info хранится как JSON или отдельно обрабатывается
                 return conversations
     except Exception as e:
-        logger.error(f"Ошибка получения всех активных диалогов: {e}")
+        logger.error(f"Ошибка получения активных диалогов: {e}")
         return []
 
 def get_active_questions():
-    # Можно использовать get_all_active_conversations и фильтровать по type='question'
-    # Или сделать отдельный запрос
+    """Получает все активные вопросы."""
     try:
         with psycopg.connect(DATABASE_URL) as conn:
             with conn.cursor(row_factory=dict_row) as cur:
@@ -86,48 +95,8 @@ def get_active_questions():
         logger.error(f"Ошибка получения активных вопросов: {e}")
         return []
 
-def clear_all_active_conversations():
-    try:
-        with psycopg.connect(DATABASE_URL) as conn:
-            with conn.cursor() as cur:
-                cur.execute("DELETE FROM active_conversations")
-                deleted_count = cur.rowcount
-                # Также очищаем таблицу messages или удаляем сообщения по user_id из active_conversations
-                # cur.execute("DELETE FROM messages") # Или более точечно
-                return deleted_count
-    except Exception as e:
-        logger.error(f"Ошибка очистки активных диалогов: {e}")
-        return 0
-
-# --- Функции для работы с заказами ---
-def get_total_orders_count():
-    # Это может быть количество записей в таблице заказов или подсчет по типу в active_conversations
-    # Предположим, что заказы тоже хранятся в active_conversations с типом 'order'
-    try:
-        with psycopg.connect(DATABASE_URL) as conn:
-            with conn.cursor() as cur:
-                cur.execute("SELECT COUNT(*) FROM active_conversations WHERE type IN ('order', 'subscription_order', 'digital_order')")
-                count = cur.fetchone()[0]
-                return count
-    except Exception as e:
-        logger.error(f"Ошибка получения количества заказов: {e}")
-        return 0
-
-# --- Функции для работы с вопросами ---
-def get_total_questions_count():
-    # Предполагаем, что вопросы хранятся с типом 'question'
-    try:
-        with psycopg.connect(DATABASE_URL) as conn:
-            with conn.cursor() as cur:
-                cur.execute("SELECT COUNT(*) FROM active_conversations WHERE type = 'question'")
-                count = cur.fetchone()[0]
-                return count
-    except Exception as e:
-        logger.error(f"Ошибка получения количества вопросов: {e}")
-        return 0
-
-# --- Функции для работы с сообщениями ---
 def get_conversation_history(user_id, limit=50):
+    """Получает историю переписки с пользователем."""
     try:
         with psycopg.connect(DATABASE_URL) as conn:
             with conn.cursor(row_factory=dict_row) as cur:
@@ -137,13 +106,76 @@ def get_conversation_history(user_id, limit=50):
                     ORDER BY created_at DESC
                     LIMIT %s
                 """, (user_id, limit))
-                # Используем DESC и reversed в commands.py
                 history = cur.fetchall()
                 return history
     except Exception as e:
         logger.error(f"Ошибка получения истории переписки для {user_id}: {e}")
         return []
 
-# --- Функции для сохранения данных ---
-# (save_user, save_active_conversation, save_message и т.д. должны быть здесь)
-# ... (ваш код сохранения данных) ...
+def clear_all_active_conversations():
+    """Очищает все активные диалоги."""
+    try:
+        with psycopg.connect(DATABASE_URL) as conn:
+            with conn.cursor() as cur:
+                cur.execute("DELETE FROM active_conversations")
+                deleted_count = cur.rowcount
+                return deleted_count
+    except Exception as e:
+        logger.error(f"Ошибка очистки активных диалогов: {e}")
+        return 0
+
+def save_new_question(user_id, user_info, message_text):
+    """Сохраняет новое вопрос."""
+    try:
+        with psycopg.connect(DATABASE_URL) as conn:
+            with conn.cursor() as cur:
+                # Сохраняем пользователя
+                cur.execute("""
+                    INSERT INTO users (id, username, first_name, last_name, language_code, is_bot, created_at, updated_at)
+                    VALUES (%s, %s, %s, %s, %s, %s, NOW(), NOW())
+                    ON CONFLICT (id) DO UPDATE SET
+                        username = EXCLUDED.username,
+                        first_name = EXCLUDED.first_name,
+                        last_name = EXCLUDED.last_name,
+                        language_code = EXCLUDED.language_code,
+                        updated_at = NOW()
+                """, (user_info.id, user_info.username, user_info.first_name, user_info.last_name, user_info.language_code, user_info.is_bot))
+                
+                # Сохраняем активный диалог
+                cur.execute("""
+                    INSERT INTO active_conversations (user_id, type, assigned_owner, last_message, created_at, updated_at)
+                    VALUES (%s, 'question', NULL, %s, NOW(), NOW())
+                """, (user_id, message_text))
+                
+                # Сохраняем сообщение
+                cur.execute("""
+                    INSERT INTO messages (user_id, message, is_from_user, created_at)
+                    VALUES (%s, %s, TRUE, NOW())
+                """, (user_id, message_text))
+                
+                conn.commit()
+    except Exception as e:
+        logger.error(f"Ошибка сохранения нового вопроса от {user_id}: {e}")
+
+def is_user_in_active_conversation(user_id):
+    """Проверяет, находится ли пользователь в активном диалоге."""
+    try:
+        with psycopg.connect(DATABASE_URL) as conn:
+            with conn.cursor() as cur:
+                cur.execute("SELECT 1 FROM active_conversations WHERE user_id = %s", (user_id,))
+                return cur.fetchone() is not None
+    except Exception as e:
+        logger.error(f"Ошибка проверки активного диалога для {user_id}: {e}")
+        return False
+
+def get_assigned_owner(user_id):
+    """Получает ID владельца, который ведет диалог с пользователем."""
+    try:
+        with psycopg.connect(DATABASE_URL) as conn:
+            with conn.cursor() as cur:
+                cur.execute("SELECT assigned_owner FROM active_conversations WHERE user_id = %s", (user_id,))
+                result = cur.fetchone()
+                return result[0] if result else None
+    except Exception as e:
+        logger.error(f"Ошибка получения назначенного владельца для {user_id}: {e}")
+        return None
