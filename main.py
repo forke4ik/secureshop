@@ -1177,7 +1177,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     
     # --- Обработка данных для подписки после оплаты ---
     awaiting_data = context.user_data.get('awaiting_subscription_data', False)
-    if awaiting_
+    if awaiting_:
         subscription_details = context.user_data.get('subscription_order_details', {})
         if subscription_details:
             # Формируем сообщение с данными для владельцев
@@ -1417,5 +1417,6 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
+
 
 
