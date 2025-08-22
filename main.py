@@ -50,6 +50,14 @@ from pay_rules import (
     generate_pay_command_from_selection,
     generate_pay_command_from_digital_product,
 )
+from commands import (
+    stats,
+    export_users_json,
+    show_active_chats,
+    show_questions,
+    show_conversation_history,
+    clear_active_conversations_command,
+)
 
 logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", level=logging.INFO
@@ -116,8 +124,8 @@ class HealthCheckHandler(BaseHTTPRequestHandler):
             self.send_header('Content-type', 'application/json')
             self.end_headers()
             response = json.dumps({
-                'status': 'ok', 
-                'bot': 'running', 
+                'status': 'ok',
+                'bot': 'running',
                 'timestamp': datetime.now().isoformat()
             }).encode('utf-8')
             self.wfile.write(response)
@@ -354,28 +362,6 @@ async def dialog_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         logger.error(f"Ошибка при начале ручного диалога: {e}")
         await update.message.reply_text("❌ Помилка при початку діалогу.")
 
-async def stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    logger.info(f"📈 Вызов /stats пользователем {update.effective_user.id}")
-    owner_id = update.effective_user.id
-    if owner_id not in OWNER_IDS:
-        return
-    try:
-        total_users = len(users_db)
-        completed_orders = len([c for c in active_conversations.values() if c.get('type') == 'order'])
-        active_questions = len([c for c in active_conversations.values() if c.get('type') == 'question'])
-        active_chats = len(active_conversations)
-        stats_message = (
-            f"📊 Статистика бота:\n"
-            f"👤 Усього користувачів: {total_users}\n"
-            f"🛒 Усього замовлень: {completed_orders}\n"
-            f"❓ Активних запитаннь: {active_questions}\n"
-            f"👥 Активних чатів: {active_chats}"
-        )
-        await update.message.reply_text(stats_message)
-    except Exception as e:
-        logger.error(f"Ошибка получения статистики: {e}")
-        await update.message.reply_text("❌ Помилка при отриманні статистики.")
-
 async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     query = update.callback_query
     await query.answer()
@@ -570,7 +556,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
                 pending_order['order_id'], 
                 f"{pending_order['service']} {pending_order['plan']} ({pending_order['period']})"
             )
-            if invoice_data and 'invoice_url' in invoice_data:
+            if invoice_data and 'invoice_url' in invoice_
                 pay_url = invoice_data['invoice_url']
                 message = (
                     f"₿ Оплата криптовалютою:\n"
@@ -807,38 +793,76 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
                 )
         else:
             await update.message.reply_text(
-                "ℹ️ Ви не ведете діалог з жодним клієнтом. Очікуйте нове повідомлення або скористайтесь командою /dialog."
+                "ℹ️ Ви не ведете діалог з жодним клієнтом. Очікуйте нове повідомлення або скористайсься командою /dialog."
             )
-        return
-    if message_text.startswith('/pay'):
-        await pay_command(update, context)
         return
     conversation_type = context.user_data.get('conversation_type')
     if conversation_type == 'question':
-        forward_message = (
-            f"❓ Нове запитання від клієнта:\n"
-            f"👤 Клієнт: {user.first_name}\n"
-            f"📱 Username: @{user.username if user.username else 'не вказано'}\n"
-            f"🆔 ID: {user.id}\n"
-            f"💬 Повідомлення:\n{message_text}"
-        )
-        keyboard = [[InlineKeyboardButton("✅ Відповісти", callback_data=f'take_question_{user_id}')]]
-        reply_markup = InlineKeyboardMarkup(keyboard)
-        success = False
-        for owner_id in OWNER_IDS:
-            try:
-                await context.bot.send_message(
-                    chat_id=owner_id, 
-                    text=forward_message, 
-                    reply_markup=reply_markup
+        # Проверяем, находится ли пользователь уже в активном диалоге
+        if user_id in active_conversations:
+            # Пользователь уже в диалоге, просто пересылаем сообщение владельцу
+            assigned_owner_id = active_conversations[user_id].get('assigned_owner')
+            if assigned_owner_id:
+                try:
+                    await context.bot.send_message(
+                        chat_id=assigned_owner_id,
+                        text=f"📩 Повідомлення від клієнта:\n{message_text}",
+                    )
+                    # Опционально: подтверждение клиенту
+                    # await update.message.reply_text("✅ Повідомлення надіслано представнику магазину.")
+                except Exception as e:
+                    logger.error(f"Ошибка пересылки сообщения от клиента {user_id} владельцу {assigned_owner_id}: {e}")
+                    await update.message.reply_text("❌ Помилка при надсиланні повідомлення. Спробуйте пізніше.")
+            else:
+                # Диалог активен, но владелец не назначен (редкий случай)
+                forward_message = (
+                    f"❓ Нове повідомлення в активному діалозі (власник не призначений):\n"
+                    f"👤 Клієнт: {user.first_name}\n"
+                    f"📱 Username: @{user.username if user.username else 'не вказано'}\n"
+                    f"🆔 ID: {user.id}\n"
+                    f"💬 Повідомлення:\n{message_text}"
                 )
-                success = True
-            except Exception as e:
-                logger.error(f"Не удалось отправить вопрос владельцу {owner_id}: {e}")
-        if success:
-            await update.message.reply_text("✅ Ваше запитання надіслано. Очікуйте відповіді.")
+                keyboard = [[InlineKeyboardButton("✅ Відповісти", callback_data=f'take_question_{user_id}')]]
+                reply_markup = InlineKeyboardMarkup(keyboard)
+                success = False
+                for owner_id in OWNER_IDS:
+                    try:
+                        await context.bot.send_message(
+                            chat_id=owner_id,
+                            text=forward_message,
+                            reply_markup=reply_markup
+                        )
+                        success = True
+                    except Exception as e:
+                        logger.error(f"Не удалось отправить сообщение владельцу {owner_id}: {e}")
+                # if success: # Не отправляем подтверждение, так как диалог уже активен
+                #     await update.message.reply_text("✅ Повідомлення надіслано.")
         else:
-            await update.message.reply_text("❌ На жаль, не вдалося надіслати ваше запитання. Спробуйте пізніше.")
+            # Если пользователь НЕ в активном диалоге, создаем новый запрос
+            forward_message = (
+                f"❓ Нове запитання від клієнта:\n"
+                f"👤 Клієнт: {user.first_name}\n"
+                f"📱 Username: @{user.username if user.username else 'не вказано'}\n"
+                f"🆔 ID: {user.id}\n"
+                f"💬 Повідомлення:\n{message_text}"
+            )
+            keyboard = [[InlineKeyboardButton("✅ Відповісти", callback_data=f'take_question_{user_id}')]]
+            reply_markup = InlineKeyboardMarkup(keyboard)
+            success = False
+            for owner_id in OWNER_IDS:
+                try:
+                    await context.bot.send_message(
+                        chat_id=owner_id,
+                        text=forward_message,
+                        reply_markup=reply_markup
+                    )
+                    success = True
+                except Exception as e:
+                    logger.error(f"Не удалось отправить вопрос владельцу {owner_id}: {e}")
+            if success:
+                await update.message.reply_text("✅ Ваше запитання надіслано. Очікуйте відповіді.")
+            else:
+                await update.message.reply_text("❌ На жаль, не вдалося надіслати ваше запитання. Спробуйте пізніше.")
         return
     if user_id in active_conversations:
         assigned_owner_id = active_conversations[user_id].get('assigned_owner')
@@ -895,7 +919,7 @@ async def pay_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
 
     invoice_data = create_nowpayments_invoice(total_uah, order_id, "Замовлення через /pay")
     
-    if invoice_data and 'invoice_url' in invoice_data:
+    if invoice_data and 'invoice_url' in invoice_
         pay_url = invoice_data['invoice_url']
         payment_message = (
             f"✅ Дякуємо за замовлення #{order_id}!\n"
@@ -952,7 +976,12 @@ def main() -> None:
     application.add_handler(CommandHandler("channel", channel_command))
     application.add_handler(CommandHandler("stop", stop_conversation))
     application.add_handler(CommandHandler("dialog", dialog_command))
-    application.add_handler(CommandHandler("stats", stats_command))
+    application.add_handler(CommandHandler("stats", stats))
+    application.add_handler(CommandHandler("json", export_users_json))
+    application.add_handler(CommandHandler("chats", show_active_chats))
+    application.add_handler(CommandHandler("questions", show_questions))
+    application.add_handler(CommandHandler("history", show_conversation_history))
+    application.add_handler(CommandHandler("clear", clear_active_conversations_command))
     application.add_handler(CommandHandler("pay", pay_command))
     application.add_handler(CallbackQueryHandler(button_handler))
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
