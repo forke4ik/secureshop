@@ -341,7 +341,7 @@ def ensure_user_exists(user):
     except Exception as e:
         logger.error(f"Ошибка при добавлении/обновлении пользователя {user.id}: {e}")
 
-def create_nowpayments_invoice(price_amount, order_id, product_name, pay_currency="usdtsol", pay_amount=None):
+def create_nowpayments_invoice(price_amount, order_id, product_name, pay_currency="usdtsol"):
     """
     Создает инвойс в NOWPayments.
     
@@ -350,11 +350,27 @@ def create_nowpayments_invoice(price_amount, order_id, product_name, pay_currenc
         order_id (str): Уникальный ID заказа.
         product_name (str): Название продукта.
         pay_currency (str): Код криптовалюты для оплаты (например, 'usdttrc20').
-        pay_amount (float, optional): Фиксированная сумма для оплаты в криптовалюте (например, 1.3). Если None, NOWPayments рассчитает сумму самостоятельно.
         
     Returns:
         dict: Данные инвойса от NOWPayments или словарь с ошибкой.
     """
+    # Получаем курс UAH к USD из переменной окружения
+    exchange_rate_uah_to_usd_str = os.environ.get('EXCHANGE_RATE_UAH_TO_USD')
+    if not exchange_rate_uah_to_usd_str:
+        logger.critical("❌ Переменная окружения EXCHANGE_RATE_UAH_TO_USD не установлена!")
+        return {"error": "Курс UAH к USD не настроен"}
+    try:
+        exchange_rate_uah_to_usd = float(exchange_rate_uah_to_usd_str)
+    except ValueError as e:
+        logger.critical(f"❌ Некорректное значение курса UAH к USD: {exchange_rate_uah_to_usd_str}. Ошибка: {e}")
+        return {"error": "Некорректное значение курса UAH к USD"}
+
+    # Рассчитываем сумму в USD (которая будет эквивалентом в USDT)
+    amount_usd = price_amount / exchange_rate_uah_to_usd
+    # Округляем до 2 знаков после запятой
+    amount_usd_rounded = round(amount_usd, 2)
+    logger.info(f"🧾 Сумма в UAH: {price_amount}, Курс UAH к USD: {exchange_rate_uah_to_usd}, Сумма в USD: {amount_usd_rounded}")
+
     logger.info(
         f"🧾 Создание инвойса NOWPayments: цена {price_amount} {PAYMENT_CURRENCY}, заказ {order_id}, валюта оплаты {pay_currency}"
     )
@@ -386,14 +402,6 @@ def create_nowpayments_invoice(price_amount, order_id, product_name, pay_currenc
         "success_url": "https://t.me/SecureShopBot",
         "cancel_url": "https://t.me/SecureShopBot",
     }
-    
-    # Добавляем фиксированную сумму в криптовалюте, если она указана
-    if pay_amount is not None:
-        try:
-            payload["pay_amount"] = float(pay_amount)
-        except (ValueError, TypeError) as e:
-            logger.error(f"❌ Ошибка преобразования суммы оплаты в число: {e}")
-            # Не добавляем pay_amount, пусть NOWPayments сам рассчитает
     
     try:
         response = requests.post(url, json=payload, headers=headers, timeout=15)
@@ -775,7 +783,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         try:
             logger.info(f"Начало обработки {query.data} для пользователя {user_id}")
             parts = query.data.split('_')
-            logger.info(f"Разобранные части callback_data: {parts}")
+            logger.info(f"Разобранные части callback_ {parts}")
             if len(parts) < 4 or not parts[2].isdigit():
                 raise ValueError("Некорректный формат callback_data для оплаты криптовалютой")
             
@@ -806,7 +814,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             logger.info(f"Результат создания инвойса: {invoice_data}")
             
             # Проверяем, успешно ли создан инвойс и содержит ли он URL
-            if invoice_data and isinstance(invoice_data, dict) and 'invoice_url' in invoice_data:
+            if invoice_data and isinstance(invoice_data, dict) and 'invoice_url' in invoice_
                 pay_url = invoice_data['invoice_url']
                 logger.info(f"Извлеченный pay_url: {pay_url}")
                 message = (
@@ -833,22 +841,13 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         except Exception as e:
             logger.error(f"Неожиданная ошибка при обработке оплаты криптовалютой для пользователя {user_id}: {e}", exc_info=True)
             await query.message.edit_text("❌ Неожиданная помилка обробки оплати криптовалютою.")
-    
-    # --- Обработка нажатия кнопки "ОПЛАЧЕНО" (для подписок) ---
+
+    # --- Обработка нажатия кнопки "ОПЛАЧЕНО" (карта или крипта) ---
     elif query.data in ['paid_card', 'paid_crypto']:
         pending_order = context.user_data.get('pending_order')
-        if pending_order and pending_order.get('type') == 'subscription':
-            # Сохраняем заказ в БД
-            try:
-                items_str = f"{pending_order['service']} {pending_order['plan']} ({pending_order['period']}) - {pending_order['price']} UAH"
-                save_order(user_id, pending_order['order_id'], items_str, pending_order['price'])
-                increment_orders() # Увеличиваем счетчик заказов
-            except Exception as e:
-                logger.error(f"Ошибка сохранения заказа: {e}")
-            
-            # --- Логика после оплаты подписки ---
-            order_summary_for_owner = (
-                f"🛍️ НОВЕ ЗАМОВЛЕННЯ (Підписка) #{pending_order['order_id']}\n"
+        if pending_order:# Формируем сообщение для владельцев
+            order_summary = (
+                f"🛍️ НОВЕ ЗАМОВЛЕННЯ #{pending_order['order_id']}\n"
                 f"👤 Клієнт: @{user.username or user.first_name} (ID: {user_id})\n"
                 f"📦 Деталі замовлення:\n"
                 f"▫️ Сервіс: {pending_order['service']}\n"
@@ -858,98 +857,27 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
                 f"💳 ЗАГАЛЬНА СУМА: {pending_order['price']} UAH\n"
                 f"Команда для підтвердження: <code>{pending_order['command']}</code>"
             )
-            
             # Отправляем уведомление всем владельцам
             success = False
             for owner_id in OWNER_IDS:
                 try:
                     await context.bot.send_message(
-                        chat_id=owner_id, 
-                        text=order_summary_for_owner, 
+                        chat_id=owner_id,
+                        text=order_summary,
                         parse_mode='HTML'
                     )
                     success = True
                 except Exception as e:
                     logger.error(f"Не удалось отправить уведомление владельцу {owner_id}: {e}")
-            
-            # --- Отправляем сообщение клиенту ---
-            if user.username:
-                # У пользователя есть username, собираем анкету
-                await query.message.edit_text(
-                    "✅ Дякуємо за оплату! Для завершення замовлення, будь ласка, надішліть мені ваш логін та пароль для сервісу в наступному повідомленні."
-                )
-                # Устанавливаем флаг для ожидания данных
-                context.user_data['awaiting_subscription_data'] = True
-                context.user_data['subscription_order_details'] = pending_order
+            if success:
+                await query.message.edit_text("✅ Дякуємо за оплату! Ми зв'яжемося з вами найближчим часом для підтвердження замовлення.")
             else:
-                # У пользователя нет username, отправляем инструкцию и кнопку
-                support_message = (
-                    "✅ Дякуємо за оплату!\n"
-                    "Для завершення замовлення, будь ласка, зв'яжіться з нашою службою підтримки.\n"
-                    "Натисніть кнопку нижче, щоб перейти до чату з оператором."
-                )
-                support_keyboard = [
-                    [InlineKeyboardButton("💬 Зв'язатися з підтримкою", url="https://t.me/SecureSupport")]
-                ]
-                await query.message.edit_text(
-                    support_message,
-                    reply_markup=InlineKeyboardMarkup(support_keyboard)
-                )
-            
+                await query.message.edit_text("✅ Дякуємо за оплату! Виникла помилка при відправці сповіщення, але оплата прийнята.")
             # Очищаем данные заказа из user_data
             context.user_data.pop('pending_order', None)
-            
-        elif pending_order and pending_order.get('type') == 'digital':
-             # Сохраняем заказ в БД
-             try:
-                items_str = f"{pending_order['plan']} - {pending_order['price']} UAH"
-                save_order(user_id, pending_order['order_id'], items_str, pending_order['price'])
-                increment_orders() # Увеличиваем счетчик заказов
-             except Exception as e:
-                logger.error(f"Ошибка сохранения цифрового заказа: {e}")
-                
-             # --- Логика после оплаты цифрового товара ---
-             order_summary_for_owner = (
-                f"🛍️ НОВЕ ЗАМОВЛЕННЯ (Цифровий товар) #{pending_order['order_id']}\n"
-                f"👤 Клієнт: @{user.username or user.first_name} (ID: {user_id})\n"
-                f"📦 Деталі замовлення:\n"
-                f"▫️ Товар: {pending_order['plan']}\n"
-                f"▫️ Сума: {pending_order['price']} UAH\n"
-                f"💳 ЗАГАЛЬНА СУМА: {pending_order['price']} UAH\n"
-             )
-             # Отправляем уведомление всем владельцам
-             success = False
-             for owner_id in OWNER_IDS:
-                 try:
-                     await context.bot.send_message(chat_id=owner_id, text=order_summary_for_owner)
-                     success = True
-                 except Exception as e:
-                     logger.error(f"Не удалось отправить уведомление владельцу {owner_id}: {e}")
-            
-             # --- Отправляем сообщение клиенту ---
-             if user.username:
-                 # У пользователя есть username, сообщаем, что с ним свяжутся
-                 await query.message.edit_text(
-                     "✅ Дякуємо за оплату! Наш менеджер зв'яжеться з вами найближчим часом для передачі товару."
-                 )
-             else:
-                 # У пользователя нет username, предлагаем связаться
-                 support_message = (
-                     "✅ Дякуємо за оплату!\n"
-                     "Наш менеджер зв'яжеться з вами найближчим часом. Якщо цього не сталося, будь ласка, зв'яжіться з нами."
-                 )
-                 support_keyboard = [
-                     [InlineKeyboardButton("💬 Зв'язатися з підтримкою", url="https://t.me/SecureSupport")]
-                 ]
-                 await query.message.edit_text(
-                     support_message,
-                     reply_markup=InlineKeyboardMarkup(support_keyboard)
-                 )
-             # Очищаем данные заказа из user_data
-             context.user_data.pop('pending_order', None)
         else:
             await query.message.edit_text("ℹ️ Інформація про оплату вже оброблена або відсутня.")
-    
+
     # --- Обработка нажатия кнопки "СКАСУВАТИ" оплату ---
     elif query.data == 'cancel_payment':
         pending_order = context.user_data.get('pending_order')
@@ -965,7 +893,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             context.user_data.pop('pending_order', None)
         else:
             await query.message.edit_text("❌ Оплата вже скасована або відсутня.")
-    
+
     # --- Обработка цифровых товаров ---
     elif query.data == "order_digital":
         keyboard = [
@@ -1098,7 +1026,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         try:
             logger.info(f"Начало обработки {query.data} для пользователя {user_id}")
             parts = query.data.split('_')
-            logger.info(f"Разобранные части callback_data: {parts}")
+            logger.info(f"Разобранные части callback_ {parts}")
             if len(parts) < 5 or not parts[4].isdigit():
                 raise ValueError("Некорректный формат callback_data для оплаты криптовалютой из /pay")
             
@@ -1109,7 +1037,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             
             pending_order_data = context.user_data.get('pending_order_from_command')
             logger.info(f"Полученный pending_order_from_command: {pending_order_data}")
-            if not pending_order_:
+            if not pending_order_
                 logger.warning(f"Информация о заказе из /pay отсутствует для пользователя {user_id}")
                 await query.message.edit_text("❌ Помилка: інформація про замовлення відсутня.")
                 return
@@ -1129,7 +1057,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             logger.info(f"Результат создания инвойса: {invoice_data}")
             
             # Проверяем, успешно ли создан инвойс и содержит ли он URL
-            if invoice_data and isinstance(invoice_data, dict) and 'invoice_url' in invoice_data:
+            if invoice_data and isinstance(invoice_data, dict) and 'invoice_url' in invoice_
                 pay_url = invoice_data['invoice_url']
                 logger.info(f"Извлеченный pay_url: {pay_url}")
                 message = (
@@ -1161,7 +1089,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     elif query.data == 'paid_after_command':
         # Отримуємо інформацію про замовлення з user_data
         pending_order_data = context.user_data.get('pending_order_from_command')
-        if pending_order_:
+        if pending_order_
             order_id = pending_order_data['order_id']
             total_uah = pending_order_data['total_uah']
             order_text = pending_order_data['order_text']
@@ -1204,10 +1132,10 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         else:
             await query.message.edit_text("ℹ️ Інформація про оплату вже оброблена або відсутня.")
 
-    # --- Обробка натискання кнопки "СКАСУВАТИ" оплату з команди /pay---
+    # --- Обработка натискання кнопки "СКАСУВАТИ" оплату з команды /pay---
     elif query.data == 'cancel_payment_command':
         pending_order_data = context.user_data.get('pending_order_from_command')
-        if pending_order_:
+        if pending_order_
             await query.message.edit_text(
                 f"❌ Оплата скасована.\n"
                 f"Номер замовлення: #{pending_order_data['order_id']}\n"
@@ -1229,7 +1157,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     
     # --- Обработка данных для подписки после оплаты ---
     awaiting_data = context.user_data.get('awaiting_subscription_data', False)
-    if awaiting_:
+    if awaiting_
         subscription_details = context.user_data.get('subscription_order_details', {})
         if subscription_details:
             # Формируем сообщение с данными для владельцев
@@ -1344,7 +1272,7 @@ async def pay_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     invoice_data = create_nowpayments_invoice(total_uah, order_id, "Замовлення через /pay")
     
     # Формируем сообщение и клавиатуру
-    if invoice_data and isinstance(invoice_data, dict) and 'invoice_url' in invoice_data:
+    if invoice_data and isinstance(invoice_data, dict) and 'invoice_url' in invoice_
         pay_url = invoice_data['invoice_url']
         payment_message = (
             f"✅ Дякуємо за замовлення #{order_id}!\n"
@@ -1469,7 +1397,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-
-
-
-
