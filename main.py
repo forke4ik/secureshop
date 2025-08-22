@@ -556,7 +556,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
                 pending_order['order_id'], 
                 f"{pending_order['service']} {pending_order['plan']} ({pending_order['period']})"
             )
-            if invoice_data and 'invoice_url' in invoice_
+            if invoice_data and 'invoice_url' in invoice_data:
                 pay_url = invoice_data['invoice_url']
                 message = (
                     f"₿ Оплата криптовалютою:\n"
@@ -997,3 +997,4 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
+
