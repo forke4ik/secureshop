@@ -341,7 +341,7 @@ def ensure_user_exists(user):
     except Exception as e:
         logger.error(f"Ошибка при добавлении/обновлении пользователя {user.id}: {e}")
 
-def create_nowpayments_invoice(price_amount, order_id, product_name, pay_currency="usdtsol"):
+def create_nowpayments_invoice(price_amount, order_id, product_name, pay_currency="usdtsol", pay_amount=None):
     """
     Создает инвойс в NOWPayments.
     
@@ -350,6 +350,7 @@ def create_nowpayments_invoice(price_amount, order_id, product_name, pay_currenc
         order_id (str): Уникальный ID заказа.
         product_name (str): Название продукта.
         pay_currency (str): Код криптовалюты для оплаты (например, 'usdttrc20').
+        pay_amount (float, optional): Фиксированная сумма для оплаты в криптовалюте (например, 1.3). Если None, NOWPayments рассчитает сумму самостоятельно.
         
     Returns:
         dict: Данные инвойса от NOWPayments или словарь с ошибкой.
@@ -386,8 +387,16 @@ def create_nowpayments_invoice(price_amount, order_id, product_name, pay_currenc
         "cancel_url": "https://t.me/SecureShopBot",
     }
     
+    # Добавляем фиксированную сумму в криптовалюте, если она указана
+    if pay_amount is not None:
+        try:
+            payload["pay_amount"] = float(pay_amount)
+        except (ValueError, TypeError) as e:
+            logger.error(f"❌ Ошибка преобразования суммы оплаты в число: {e}")
+            # Не добавляем pay_amount, пусть NOWPayments сам рассчитает
+    
     try:
-        response = requests.post(url, json=payload, headers=headers, timeout=15) # Увеличен таймаут
+        response = requests.post(url, json=payload, headers=headers, timeout=15)
         logger.info(f"🧾 Статус ответа NOWPayments: {response.status_code}")
         if response.status_code in [200, 201]:
             data = response.json()
@@ -1460,6 +1469,7 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
+
 
 
 
