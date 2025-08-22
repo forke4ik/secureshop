@@ -719,54 +719,6 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             logger.error(f"Неожиданная ошибка при обработке выбора криптовалюты: {e}")
             await query.message.edit_text("❌ Неожиданная помилка обробки вибору криптовалюти.")
     
-    elif query.data.startswith('pay_crypto_'):
-        try:
-            parts = query.data.split('_')
-            if len(parts) < 4 or not parts[2].isdigit():
-                raise ValueError("Некорректный формат callback_data для оплаты криптовалютой")
-            
-            price = int(parts[2])
-            pay_currency_code = parts[3]
-            
-            pending_order = context.user_data.get('pending_order')
-            if not pending_order:
-                await query.message.edit_text("❌ Помилка: інформація про замовлення відсутня.")
-                return
-                
-            currency_name = next((name for name, code in AVAILABLE_CURRENCIES.items() if code == pay_currency_code), pay_currency_code)
-            
-            invoice_data = create_nowpayments_invoice(
-                price_amount=price, 
-                order_id=pending_order['order_id'], 
-                product_name=f"{pending_order['service']} {pending_order['plan']} ({pending_order['period']})",
-                pay_currency=pay_currency_code
-            )
-            
-            if invoice_data and 'invoice_url' in invoice_:
-                pay_url = invoice_data['invoice_url']
-                message = (
-                    f"₿ Оплата криптовалютою:\n"
-                    f"Сума: {price} UAH\n"
-                    f"Валюта: {currency_name}\n"
-                    f"Натисніть кнопку нижче для переходу до оплати.\n"
-                    f"Після оплати натисніть кнопку \"✅ Оплачено\"."
-                )
-                keyboard = [
-                    [InlineKeyboardButton("🔗 Перейти до оплати", url=pay_url)],
-                    [InlineKeyboardButton("✅ Оплачено", callback_data='paid_crypto')],
-                    [InlineKeyboardButton("❌ Скасувати", callback_data='cancel_payment')]
-                ]
-                await query.message.edit_text(message, reply_markup=InlineKeyboardMarkup(keyboard))
-            else:
-                error_msg = invoice_data.get('error', 'Невідома помилка') if invoice_data else 'Невідома помилка'
-                await query.message.edit_text(f"❌ Помилка створення інвойсу для оплати криптовалютою: {error_msg}")
-        except (ValueError, IndexError) as e:
-            logger.error(f"Ошибка обработки оплаты криптовалютой: {e}")
-            await query.message.edit_text("❌ Помилка обробки оплати криптовалютою.")
-        except Exception as e:
-            logger.error(f"Неожиданная ошибка при обработке оплаты криптовалютой: {e}")
-            await query.message.edit_text("❌ Неожиданная помилка обробки оплати криптовалютою.")
-    
     elif query.data in ['paid_card', 'paid_crypto']:
         pending_order = context.user_data.get('pending_order')
         if pending_order and pending_order.get('type') == 'subscription':
@@ -1324,5 +1276,6 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
+
 
 
