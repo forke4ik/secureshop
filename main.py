@@ -341,7 +341,7 @@ def ensure_user_exists(user):
     except Exception as e:
         logger.error(f"Ошибка при добавлении/обновлении пользователя {user.id}: {e}")
 
-def create_nowpayments_invoice(price_amount, order_id, product_name, pay_currency="usdtsol"):
+def create_nowpayments_invoice(price_amount, order_id, product_name, pay_currency="usdtsol", pay_amount=None):
     """
     Создает инвойс в NOWPayments.
     
@@ -350,27 +350,11 @@ def create_nowpayments_invoice(price_amount, order_id, product_name, pay_currenc
         order_id (str): Уникальный ID заказа.
         product_name (str): Название продукта.
         pay_currency (str): Код криптовалюты для оплаты (например, 'usdttrc20').
+        pay_amount (float, optional): Фиксированная сумма для оплаты в криптовалюте (например, 1.3). Если None, NOWPayments рассчитает сумму самостоятельно.
         
     Returns:
         dict: Данные инвойса от NOWPayments или словарь с ошибкой.
     """
-    # Получаем курс UAH к USD из переменной окружения
-    exchange_rate_uah_to_usd_str = os.environ.get('EXCHANGE_RATE_UAH_TO_USD')
-    if not exchange_rate_uah_to_usd_str:
-        logger.critical("❌ Переменная окружения EXCHANGE_RATE_UAH_TO_USD не установлена!")
-        return {"error": "Курс UAH к USD не настроен"}
-    try:
-        exchange_rate_uah_to_usd = float(exchange_rate_uah_to_usd_str)
-    except ValueError as e:
-        logger.critical(f"❌ Некорректное значение курса UAH к USD: {exchange_rate_uah_to_usd_str}. Ошибка: {e}")
-        return {"error": "Некорректное значение курса UAH к USD"}
-
-    # Рассчитываем сумму в USD (которая будет эквивалентом в USDT)
-    amount_usd = price_amount / exchange_rate_uah_to_usd
-    # Округляем до 2 знаков после запятой
-    amount_usd_rounded = round(amount_usd, 2)
-    logger.info(f"🧾 Сумма в UAH: {price_amount}, Курс UAH к USD: {exchange_rate_uah_to_usd}, Сумма в USD: {amount_usd_rounded}")
-
     logger.info(
         f"🧾 Создание инвойса NOWPayments: цена {price_amount} {PAYMENT_CURRENCY}, заказ {order_id}, валюта оплаты {pay_currency}"
     )
@@ -403,6 +387,14 @@ def create_nowpayments_invoice(price_amount, order_id, product_name, pay_currenc
         "cancel_url": "https://t.me/SecureShopBot",
     }
     
+    # Добавляем фиксированную сумму в криптовалюте, если она указана
+    if pay_amount is not None:
+        try:
+            payload["pay_amount"] = float(pay_amount)
+        except (ValueError, TypeError) as e:
+            logger.error(f"❌ Ошибка преобразования суммы оплаты в число: {e}")
+            # Не добавляем pay_amount, пусть NOWPayments сам рассчитает
+    
     try:
         response = requests.post(url, json=payload, headers=headers, timeout=15)
         logger.info(f"🧾 Статус ответа NOWPayments: {response.status_code}")
@@ -422,7 +414,7 @@ def create_nowpayments_invoice(price_amount, order_id, product_name, pay_currenc
     except Exception as e:
         logger.error(f"🧾 Исключение при создании инвойса NOWPayments: {e}")
         return {"error": f"Исключение: {e}"}
-
+        
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Обрабатывает команду /start."""
     logger.info(f"🚀 Вызов /start пользователем {update.effective_user.id}")
@@ -1397,6 +1389,7 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
+
 
 
 
