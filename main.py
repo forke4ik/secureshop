@@ -1037,7 +1037,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             
             pending_order_data = context.user_data.get('pending_order_from_command')
             logger.info(f"Полученный pending_order_from_command: {pending_order_data}")
-            if not pending_order_
+            if not pending_order_:
                 logger.warning(f"Информация о заказе из /pay отсутствует для пользователя {user_id}")
                 await query.message.edit_text("❌ Помилка: інформація про замовлення відсутня.")
                 return
@@ -1397,6 +1397,7 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
+
 
 
 
