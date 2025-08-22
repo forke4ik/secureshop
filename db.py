@@ -11,6 +11,7 @@ def init_db():
     try:
         with psycopg.connect(DATABASE_URL) as conn:
             with conn.cursor() as cur:
+                # Создаем таблицу пользователей
                 cur.execute("""
                     CREATE TABLE IF NOT EXISTS users (
                         id BIGINT PRIMARY KEY,
@@ -23,6 +24,7 @@ def init_db():
                         updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                     );
                 """)
+                # Создаем таблицу активных диалогов
                 cur.execute("""
                     CREATE TABLE IF NOT EXISTS active_conversations (
                         id SERIAL PRIMARY KEY,
@@ -34,6 +36,7 @@ def init_db():
                         updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                     );
                 """)
+                # Создаем таблицу сообщений
                 cur.execute("""
                     CREATE TABLE IF NOT EXISTS messages (
                         id SERIAL PRIMARY KEY,
@@ -59,24 +62,36 @@ def get_total_users_count():
         logger.error(f"Ошибка получения количества пользователей: {e}")
         return 0
 
-def get_all_users_data():
-    """Получает данные всех пользователей."""
+def get_total_orders_count():
+    """Получает общее количество заказов (все активные диалоги типа order)."""
     try:
         with psycopg.connect(DATABASE_URL) as conn:
-            with conn.cursor(row_factory=dict_row) as cur:
-                cur.execute("SELECT * FROM users ORDER BY created_at DESC")
-                users = cur.fetchall()
-                return users
+            with conn.cursor() as cur:
+                cur.execute("SELECT COUNT(*) FROM active_conversations WHERE type IN ('order', 'subscription_order', 'digital_order')")
+                count = cur.fetchone()[0]
+                return count
     except Exception as e:
-        logger.error(f"Ошибка получения данных всех пользователей: {e}")
-        return []
+        logger.error(f"Ошибка получения количества заказов: {e}")
+        return 0
+
+def get_total_questions_count():
+    """Получает общее количество вопросов (активные диалоги типа question)."""
+    try:
+        with psycopg.connect(DATABASE_URL) as conn:
+            with conn.cursor() as cur:
+                cur.execute("SELECT COUNT(*) FROM active_conversations WHERE type = 'question'")
+                count = cur.fetchone()[0]
+                return count
+    except Exception as e:
+        logger.error(f"Ошибка получения количества вопросов: {e}")
+        return 0
 
 def get_active_conversations():
     """Получает все активные диалоги."""
     try:
         with psycopg.connect(DATABASE_URL) as conn:
             with conn.cursor(row_factory=dict_row) as cur:
-                cur.execute("SELECT * FROM active_conversations")
+                cur.execute("SELECT * FROM active_conversations ORDER BY created_at DESC")
                 conversations = cur.fetchall()
                 return conversations
     except Exception as e:
@@ -88,7 +103,7 @@ def get_active_questions():
     try:
         with psycopg.connect(DATABASE_URL) as conn:
             with conn.cursor(row_factory=dict_row) as cur:
-                cur.execute("SELECT * FROM active_conversations WHERE type = 'question'")
+                cur.execute("SELECT * FROM active_conversations WHERE type = 'question' ORDER BY created_at DESC")
                 questions = cur.fetchall()
                 return questions
     except Exception as e:
@@ -113,7 +128,7 @@ def get_conversation_history(user_id, limit=50):
         return []
 
 def clear_all_active_conversations():
-    """Очищает все активные диалоги."""
+    """Очищает все активные диалоги из базы данных."""
     try:
         with psycopg.connect(DATABASE_URL) as conn:
             with conn.cursor() as cur:
@@ -125,11 +140,11 @@ def clear_all_active_conversations():
         return 0
 
 def save_new_question(user_id, user_info, message_text):
-    """Сохраняет новое вопрос."""
+    """Сохраняет новое вопрос в базе данных."""
     try:
         with psycopg.connect(DATABASE_URL) as conn:
             with conn.cursor() as cur:
-                # Сохраняем пользователя
+                # Сохраняем пользователя (если его нет)
                 cur.execute("""
                     INSERT INTO users (id, username, first_name, last_name, language_code, is_bot, created_at, updated_at)
                     VALUES (%s, %s, %s, %s, %s, %s, NOW(), NOW())
@@ -141,7 +156,7 @@ def save_new_question(user_id, user_info, message_text):
                         updated_at = NOW()
                 """, (user_info.id, user_info.username, user_info.first_name, user_info.last_name, user_info.language_code, user_info.is_bot))
                 
-                # Сохраняем активный диалог
+                # Сохраняем активный диалог (вопрос)
                 cur.execute("""
                     INSERT INTO active_conversations (user_id, type, assigned_owner, last_message, created_at, updated_at)
                     VALUES (%s, 'question', NULL, %s, NOW(), NOW())
