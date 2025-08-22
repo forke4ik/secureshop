@@ -1272,7 +1272,7 @@ async def pay_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     invoice_data = create_nowpayments_invoice(total_uah, order_id, "Замовлення через /pay")
     
     # Формируем сообщение и клавиатуру
-    if invoice_data and isinstance(invoice_data, dict) and 'invoice_url' in invoice_
+    if invoice_data and isinstance(invoice_data, dict) and 'invoice_url' in invoice_:
         pay_url = invoice_data['invoice_url']
         payment_message = (
             f"✅ Дякуємо за замовлення #{order_id}!\n"
@@ -1397,6 +1397,7 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
+
 
 
 
