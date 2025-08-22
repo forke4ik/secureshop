@@ -957,6 +957,8 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             logger.error(f"Неожиданная ошибка при обработке выбора криптовалюты из /pay: {e}")
             await query.message.edit_text("❌ Неожиданная помилка обробки вибору криптовалюти.")
 
+    # ... (попередній код button_handler) ...
+
     elif query.data.startswith('pay_crypto_from_command_'):
         try:
             parts = query.data.split('_')
@@ -973,6 +975,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
                 
             currency_name = next((name for name, code in AVAILABLE_CURRENCIES.items() if code == pay_currency_code), pay_currency_code)
             
+            # Створюємо інвойс
             invoice_data = create_nowpayments_invoice(
                 price_amount=price, 
                 order_id=pending_order_data['order_id'], 
@@ -980,7 +983,9 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
                 pay_currency=pay_currency_code
             )
             
-            if invoice_data and 'invoice_url' in invoice_:
+            # Перевіряємо, чи інвойс створився успішно і містить URL
+            if invoice_data and 'invoice_url' in invoice_data:
+                # ПРАВИЛЬНО отримуємо URL з даних інвойса
                 pay_url = invoice_data['invoice_url']
                 message = (
                     f"₿ Оплата криптовалютою:\n"
@@ -990,19 +995,21 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
                     f"Після оплати натисніть кнопку \"✅ Оплачено\"."
                 )
                 keyboard = [
-                    [InlineKeyboardButton("🔗 Перейти до оплати", url=pay_url)],
+                    [InlineKeyboardButton("🔗 Перейти до оплати", url=pay_url)], # Використовуємо pay_url
                     [InlineKeyboardButton("✅ Оплачено", callback_data='paid_after_command')],
                     [InlineKeyboardButton("❌ Скасувати", callback_data='cancel_payment_command')]
                 ]
                 await query.message.edit_text(message, reply_markup=InlineKeyboardMarkup(keyboard))
             else:
+                # Обробляємо випадок, якщо інвойс не створився або не містить URL
                 error_msg = invoice_data.get('error', 'Невідома помилка') if invoice_data else 'Невідома помилка'
+                logger.error(f"Помилка отримання посилання оплати від NOWPayments: {invoice_data}")
                 await query.message.edit_text(f"❌ Помилка створення інвойсу для оплати криптовалютою: {error_msg}")
         except (ValueError, IndexError) as e:
-            logger.error(f"Ошибка обработки оплаты криптовалютой из /pay: {e}")
+            logger.error(f"Ошибка обработки оплаты криптовалютой из /pay (Value/Index): {e}")
             await query.message.edit_text("❌ Помилка обробки оплати криптовалютою.")
-        except Exception as e:
-            logger.error(f"Неожиданная ошибка при обработке оплаты криптовалютой из /pay: {e}")
+        except Exception as e: # Перехоплюємо будь-які інші помилки
+            logger.error(f"Неожиданная ошибка при обработке оплаты криптовалютой из /pay: {e}", exc_info=True) # Додаємо exc_info для детального логу
             await query.message.edit_text("❌ Неожиданная помилка обробки оплати криптовалютою.")
 
     elif query.data == 'paid_after_command':
@@ -1276,6 +1283,7 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
+
 
 
 
