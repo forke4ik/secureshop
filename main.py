@@ -742,7 +742,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
                 pay_currency=pay_currency_code
             )
             
-            if invoice_data and 'invoice_url' in invoice_
+            if invoice_data and 'invoice_url' in invoice_:
                 pay_url = invoice_data['invoice_url']
                 message = (
                     f"₿ Оплата криптовалютою:\n"
@@ -1324,3 +1324,4 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
+
