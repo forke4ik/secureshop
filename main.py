@@ -44,7 +44,6 @@ from config import (
     CARD_NUMBER,
 )
 from products_config import SUBSCRIPTIONS, DIGITAL_PRODUCTS, DIGITAL_PRODUCT_MAP
-from pay_rules import get_full_product_info, parse_pay_command # Импортируем функции из pay_rules
 
 logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", level=logging.INFO
@@ -72,7 +71,7 @@ def get_universal_menu_keyboard():
     """Создаёт универсальную клавиатуру с основными кнопками."""
     keyboard = [
         [InlineKeyboardButton("📋 Головне меню", callback_data="back_to_main")],
-        [InlineKeyboardButton("📜 Правила", url="https://gamma.app/docs/Secure-Shop-za2to9q57dhjzvb")],
+        [InlineKeyboardButton("📜 Правила", url="https://drive.google.com/file/d/1t5jQWCCJeimM8lJ132M7oTRKRG7t3dug/view?usp=drivesdk")],
         [InlineKeyboardButton("ℹ️ Допомога", callback_data="help")],
         [InlineKeyboardButton("❓ Задати питання", callback_data="question")],
     ]
@@ -388,11 +387,13 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         greeting = f"👋 Привіт, {user.first_name}!\nВи є власником цього бота."
         await update.message.reply_text(greeting, reply_markup=reply_markup)
     else:
+        # --- ИЗМЕНЕНИЕ: Добавлена кнопка "Правила" в главное меню ---
         keyboard = [
             [InlineKeyboardButton("🛒 Замовити", callback_data="order")],
             [InlineKeyboardButton("❓ Задати питання", callback_data="question")],
             [InlineKeyboardButton("ℹ️ Допомога", callback_data="help")],
             [InlineKeyboardButton("📢 Канал", callback_data="channel")],
+            [InlineKeyboardButton("📜 Правила", url="https://drive.google.com/file/d/1t5jQWCCJeimM8lJ132M7oTRKRG7t3dug/view?usp=drivesdk")], # Новая кнопка
         ]
         reply_markup = InlineKeyboardMarkup(keyboard)
         greeting = f"👋 Привіт, {user.first_name}!\nЛаскаво просимо до SecureShop!"
@@ -570,11 +571,13 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             greeting = f"👋 Привіт, {user.first_name}!\nВи є власником цього бота."
             await query.message.edit_text(greeting, reply_markup=reply_markup)
         else:
+            # --- ИЗМЕНЕНИЕ: Добавлена кнопка "Правила" в главное меню ---
             keyboard = [
                 [InlineKeyboardButton("🛒 Замовити", callback_data="order")],
                 [InlineKeyboardButton("❓ Задати питання", callback_data="question")],
                 [InlineKeyboardButton("ℹ️ Допомога", callback_data="help")],
                 [InlineKeyboardButton("📢 Канал", callback_data="channel")],
+                [InlineKeyboardButton("📜 Правила", url="https://drive.google.com/file/d/1t5jQWCCJeimM8lJ132M7oTRKRG7t3dug/view?usp=drivesdk")], # Новая кнопка
             ]
             reply_markup = InlineKeyboardMarkup(keyboard)
             greeting = f"👋 Привіт, {user.first_name}!\nЛаскаво просимо до SecureShop!"
@@ -726,7 +729,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
                 f"{pending_order['service']} {pending_order['plan']} ({pending_order['period']})",
                 pay_currency_code
             )
-            if invoice_data and 'invoice_url' in invoice_:
+            if invoice_data and 'invoice_url' in invoice_data:
                 pay_url = invoice_data['invoice_url']
                 message = (
                     f"₿ Оплата криптовалютою:\n"
@@ -834,7 +837,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
                          [InlineKeyboardButton("💬 Зв'язатися з підтримкою", url="https://t.me/SecureSupport")],
                          # Добавляем остальные кнопки из универсального меню вручную, если нужно сохранить кнопку поддержки
                          [InlineKeyboardButton("📋 Головне меню", callback_data="back_to_main")],
-                         [InlineKeyboardButton("📜 Правила", url="https://gamma.app/docs/Secure-Shop-za2to9q57dhjzvb")],
+                         [InlineKeyboardButton("📜 Правила", url="https://drive.google.com/file/d/1t5jQWCCJeimM8lJ132M7oTRKRG7t3dug/view?usp=drivesdk")],
                          [InlineKeyboardButton("ℹ️ Допомога", callback_data="help")],
                          [InlineKeyboardButton("❓ Задати питання", callback_data="question")],
                      ]
@@ -1032,7 +1035,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             price = int(parts[4])
             pay_currency_code = parts[5]
             pending_order_data = context.user_data.get('pending_order_from_command')
-            if not pending_order_:
+            if not pending_order_data:
                 await query.message.edit_text("❌ Помилка: інформація про замовлення відсутня.")
                 return
             currency_name = next((name for name, code in AVAILABLE_CURRENCIES.items() if code == pay_currency_code), pay_currency_code)
@@ -1042,7 +1045,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
                 "Замовлення через /pay",
                 pay_currency_code
             )
-            if invoice_data and 'invoice_url' in invoice_:
+            if invoice_data and 'invoice_url' in invoice_data:
                 pay_url = invoice_data['invoice_url']
                 message = (
                     f"₿ Оплата криптовалютою:\n"
@@ -1068,7 +1071,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             await query.message.edit_text("❌ Неожиданная помилка обробки оплати криптовалютою.")
     elif query.data == 'paid_after_command':
         pending_order_data = context.user_data.get('pending_order_from_command')
-        if pending_order_:
+        if pending_order_data:
             order_id = pending_order_data['order_id']
             total_uah = pending_order_data['total_uah']
             order_text = pending_order_data['order_text']
@@ -1115,7 +1118,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             await query.message.edit_text("ℹ️ Інформація про оплату вже оброблена або відсутня.")
     elif query.data == 'cancel_payment_command':
         pending_order_data = context.user_data.get('pending_order_from_command')
-        if pending_order_:
+        if pending_order_data:
             await query.message.edit_text(
                 f"❌ Оплата скасована.\n"
                 f"Номер замовлення: #{pending_order_data['order_id']}\n"
@@ -1133,7 +1136,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     message_text = update.message.text
     ensure_user_exists(user)
     awaiting_data = context.user_data.get('awaiting_subscription_data', False)
-    if awaiting_:
+    if awaiting_data:
         subscription_details = context.user_data.get('subscription_order_details', {})
         if subscription_details:
             data_message = (
@@ -1209,6 +1212,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         return
     await start(update, context)
 
+# --- ИЗМЕНЕНИЕ: Возвращена старая логика /pay ---
 async def pay_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     logger.info(f"💰 Вызов команды /pay пользователем {update.effective_user.id}")
     user = update.effective_user
@@ -1216,45 +1220,28 @@ async def pay_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     if not context.args:
         await update.message.reply_text("❌ Неправильний формат команди. Використовуйте: /pay <order_id> <товар1> <товар2> ...")
         return
-    
-    # Используем функцию из pay_rules для парсинга
-    order_id, parsed_items_or_error = parse_pay_command(context.args)
-    if order_id is None:
-        await update.message.reply_text(parsed_items_or_error) # Это сообщение об ошибке
+    order_id = context.args[0]
+    items_str = " ".join(context.args[1:])
+    pattern = r'(\w{2,4})-(\w{2,4})-([\w\s$]+?)-(\d+)'
+    items = re.findall(pattern, items_str)
+    if not items:
+        await update.message.reply_text("❌ Не вдалося розпізнати товари у замовленні. Перевірте формат.")
         return
-    
     order_text = f"🛍️ Нове замовлення #{order_id} від @{user.username or user.first_name} (ID: {user.id})\n"
     total_uah = 0
-    items_details = []
-    
-    # Используем функцию из pay_rules для получения полной информации
-    for item in parsed_items_or_error: # parsed_items_or_error теперь содержит список распарсенных элементов
-        full_info = get_full_product_info(item)
-        if full_info:
-            price = full_info['price']
-            total_uah += price
-            items_details.append(full_info)
-            order_text += f"▫️ {full_info['service_name']} {full_info['plan_name']} ({full_info['period']}) - {price} UAH\n"
-        else:
-            # Если товар не найден, показываем как есть
-            service_abbr = item['service_abbr']
-            plan_abbr = item['plan_abbr']
-            period = item['period']
-            price = item['price']
-            total_uah += price
-            order_text += f"▫️ {service_abbr}-{plan_abbr}-{period} - {price} UAH (Невідомий товар)\n"
-    
-    order_text += f"💳 Всього: {total_uah} UAH"
-    
-    # Сохраняем детали заказа в контексте
+    order_details = []
+    for service_abbr, plan_abbr, period, price_str in items:
+        price = int(price_str)
+        total_uah += price
+        order_details.append(f"▫️ {service_abbr}-{plan_abbr}-{period} - {price} UAH")
+    order_text += "\n".join(order_details)
+    order_text += f"\n💳 Всього: {total_uah} UAH"
     context.user_data['pending_order_from_command'] = {
         'order_id': order_id,
-        'items_str': " ".join(context.args[1:]), # Оригинальная строка товаров
+        'items_str': items_str,
         'total_uah': total_uah,
-        'order_text': order_text,
-        'items_details': items_details # Сохраняем детали для возможной дальнейшей обработки
+        'order_text': order_text
     }
-    
     success = False
     for owner_id in OWNER_IDS:
         try:
@@ -1262,9 +1249,8 @@ async def pay_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
             success = True
         except Exception as e:
             logger.error(f"Не удалось отправить заказ владельцу {owner_id}: {e}")
-    
     invoice_data = create_nowpayments_invoice(total_uah, order_id, "Замовлення через /pay")
-    if invoice_data and 'invoice_url' in invoice_:
+    if invoice_data and 'invoice_url' in invoice_data:
         pay_url = invoice_data['invoice_url']
         payment_message = (
             f"✅ Дякуємо за замовлення #{order_id}!\n"
@@ -1357,5 +1343,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-
-
