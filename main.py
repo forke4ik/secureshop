@@ -20,8 +20,6 @@ from telegram import (
     InlineKeyboardMarkup,
     BotCommand,
     BotCommandScopeChat,
-    ReplyKeyboardMarkup,
-    ReplyKeyboardRemove,
 )
 from telegram.ext import (
     Application,
@@ -447,8 +445,7 @@ async def question_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     ensure_user_exists(user)
     context.user_data["conversation_type"] = "question"
     await update.message.reply_text(
-        "📝 Напишіть ваше запитання. Я передам його менеджеру магазину.",
-        reply_markup=ReplyKeyboardRemove()
+        "📝 Напишіть ваше запитання. Я передам його менеджеру магазину."
     )
 
 async def stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -524,10 +521,18 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         await query.message.edit_text("📦 Оберіть тип товару:", reply_markup=InlineKeyboardMarkup(keyboard))
     elif query.data == "question":
         context.user_data["conversation_type"] = "question"
-        await query.message.edit_text(
-            "📝 Напишіть ваше запитання. Я передам його менеджеру магазину.",
-            reply_markup=ReplyKeyboardRemove()
-        )
+        # Обработка ошибки "Inline keyboard expected"
+        try:
+            await query.message.edit_text(
+                "📝 Напишіть ваше запитання. Я передам його менеджеру магазину.",
+                reply_markup=None # Убираем клавиатуру
+            )
+        except Exception as e: # Более общий перехват ошибок
+            logger.warning(f"Не удалось отредактировать сообщение для 'question': {e}. Отправляем новое сообщение.")
+            # Если не удалось отредактировать, отправляем новое сообщение
+            await query.message.reply_text(
+                "📝 Напишіть ваше запитання. Я передам його менеджеру магазину."
+            )
     elif query.data == "help":
         help_text = (
             "👋 Доброго дня! Я бот магазину SecureShop.\n"
