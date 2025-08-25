@@ -66,9 +66,7 @@ AVAILABLE_CURRENCIES = {
     "APTOS (APT)": "apt"
 }
 
-# --- Новая функция для универсальной клавиатуры ---
 def get_universal_menu_keyboard():
-    """Создаёт универсальную клавиатуру с основными кнопками."""
     keyboard = [
         [InlineKeyboardButton("📋 Головне меню", callback_data="back_to_main")],
         [InlineKeyboardButton("📜 Правила", url="https://drive.google.com/file/d/1t5jQWCCJeimM8lJ132M7oTRKRG7t3dug/view?usp=drivesdk")],
@@ -387,13 +385,12 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         greeting = f"👋 Привіт, {user.first_name}!\nВи є власником цього бота."
         await update.message.reply_text(greeting, reply_markup=reply_markup)
     else:
-        # --- ИЗМЕНЕНИЕ: Добавлена кнопка "Правила" в главное меню ---
         keyboard = [
             [InlineKeyboardButton("🛒 Замовити", callback_data="order")],
             [InlineKeyboardButton("❓ Задати питання", callback_data="question")],
             [InlineKeyboardButton("ℹ️ Допомога", callback_data="help")],
             [InlineKeyboardButton("📢 Канал", callback_data="channel")],
-            [InlineKeyboardButton("📜 Правила", url="https://drive.google.com/file/d/1t5jQWCCJeimM8lJ132M7oTRKRG7t3dug/view?usp=drivesdk")], # Новая кнопка
+            [InlineKeyboardButton("📜 Правила", url="https://drive.google.com/file/d/1t5jQWCCJeimM8lJ132M7oTRKRG7t3dug/view?usp=drivesdk")],
         ]
         reply_markup = InlineKeyboardMarkup(keyboard)
         greeting = f"👋 Привіт, {user.first_name}!\nЛаскаво просимо до SecureShop!"
@@ -449,7 +446,6 @@ async def question_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     user = update.effective_user
     ensure_user_exists(user)
     context.user_data["conversation_type"] = "question"
-    # Убираем клавиатуру, когда ожидаем вопрос
     await update.message.reply_text(
         "📝 Напишіть ваше запитання. Я передам його менеджеру магазину.",
         reply_markup=ReplyKeyboardRemove()
@@ -528,7 +524,6 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         await query.message.edit_text("📦 Оберіть тип товару:", reply_markup=InlineKeyboardMarkup(keyboard))
     elif query.data == "question":
         context.user_data["conversation_type"] = "question"
-        # Убираем клавиатуру, когда ожидаем вопрос
         await query.message.edit_text(
             "📝 Напишіть ваше запитання. Я передам його менеджеру магазину.",
             reply_markup=ReplyKeyboardRemove()
@@ -571,13 +566,12 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             greeting = f"👋 Привіт, {user.first_name}!\nВи є власником цього бота."
             await query.message.edit_text(greeting, reply_markup=reply_markup)
         else:
-            # --- ИЗМЕНЕНИЕ: Добавлена кнопка "Правила" в главное меню ---
             keyboard = [
                 [InlineKeyboardButton("🛒 Замовити", callback_data="order")],
                 [InlineKeyboardButton("❓ Задати питання", callback_data="question")],
                 [InlineKeyboardButton("ℹ️ Допомога", callback_data="help")],
                 [InlineKeyboardButton("📢 Канал", callback_data="channel")],
-                [InlineKeyboardButton("📜 Правила", url="https://drive.google.com/file/d/1t5jQWCCJeimM8lJ132M7oTRKRG7t3dug/view?usp=drivesdk")], # Новая кнопка
+                [InlineKeyboardButton("📜 Правила", url="https://drive.google.com/file/d/1t5jQWCCJeimM8lJ132M7oTRKRG7t3dug/view?usp=drivesdk")],
             ]
             reply_markup = InlineKeyboardMarkup(keyboard)
             greeting = f"👋 Привіт, {user.first_name}!\nЛаскаво просимо до SecureShop!"
@@ -785,8 +779,6 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
                 except Exception as e:
                     logger.error(f"Не удалось отправить уведомление владельцу {owner_id}: {e}")
             
-            # --- НАЧАЛО ИЗМЕНЕНИЙ ---
-            # Определяем, нужно ли специальное сообщение
             special_message_needed = False
             if (pending_order.get('service') == SUBSCRIPTIONS.get('duolingo', {}).get('name', 'Duolingo') and
                 pending_order.get('plan') == SUBSCRIPTIONS.get('duolingo', {}).get('plans', {}).get('fam', {}).get('name', 'Family') and
@@ -803,7 +795,6 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
                         "Якщо цього не сталося, зверніться до служби підтримки.",
                         reply_markup=universal_keyboard
                     )
-                    # Не ждем данных, очищаем флаги
                     context.user_data.pop('awaiting_subscription_data', None)
                     context.user_data.pop('subscription_order_details', None)
                 else:
@@ -812,22 +803,18 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
                         "Ваш акаунт буде додано до сімейної підписки Duolingo протягом 10 хвилин.\n"
                         "Якщо цього не сталося, зверніться до служби підтримки."
                     )
-                    # Клавиатура с поддержкой уже есть, но заменим на универсальную
                     await query.message.edit_text(support_message, reply_markup=universal_keyboard)
-                    # Не ждем данных, очищаем флаги
                     context.user_data.pop('awaiting_subscription_data', None)
                     context.user_data.pop('subscription_order_details', None)
             else:
-                # Стандартное сообщение для остальных подписок
                 if user.username:
                     await query.message.edit_text(
                         "✅ Дякуємо за оплату! Для завершення замовлення, будь ласка, надішліть мені ваш логін та пароль для сервісу в наступному повідомленні.",
-                        reply_markup=universal_keyboard # Добавляем универсальную клавиатуру
+                        reply_markup=universal_keyboard
                     )
                     context.user_data['awaiting_subscription_data'] = True
                     context.user_data['subscription_order_details'] = pending_order
                 else:
-                     # Оставляем старую логику для пользователей без username, но с универсальной клавиатурой
                      support_message = (
                          "✅ Дякуємо за оплату!\n"
                          "Для завершення замовлення, будь ласка, зв'яжіться з нашою службою підтримки.\n"
@@ -835,7 +822,6 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
                      )
                      support_keyboard = [
                          [InlineKeyboardButton("💬 Зв'язатися з підтримкою", url="https://t.me/SecureSupport")],
-                         # Добавляем остальные кнопки из универсального меню вручную, если нужно сохранить кнопку поддержки
                          [InlineKeyboardButton("📋 Головне меню", callback_data="back_to_main")],
                          [InlineKeyboardButton("📜 Правила", url="https://drive.google.com/file/d/1t5jQWCCJeimM8lJ132M7oTRKRG7t3dug/view?usp=drivesdk")],
                          [InlineKeyboardButton("ℹ️ Допомога", callback_data="help")],
@@ -847,7 +833,6 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
                      )
                      context.user_data.pop('awaiting_subscription_data', None)
                      context.user_data.pop('subscription_order_details', None)
-            # --- КОНЕЦ ИЗМЕНЕНИЙ ---
             
             context.user_data.pop('pending_order', None)
         elif pending_order and pending_order.get('type') == 'digital':
@@ -873,26 +858,22 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
                  except Exception as e:
                      logger.error(f"Не удалось отправить уведомление владельцу {owner_id}: {e}")
              
-             # --- НАЧАЛО ИЗМЕНЕНИЙ ---
              universal_keyboard = get_universal_menu_keyboard()
 
              if user.username:
                  await query.message.edit_text(
                      "✅ Дякуємо за оплату! Наш менеджер зв'яжеться з вами найближчим часом для передачі товару.",
-                     reply_markup=universal_keyboard # Добавляем универсальную клавиатуру
+                     reply_markup=universal_keyboard
                  )
              else:
                  support_message = (
                      "✅ Дякуємо за оплату!\n"
                      "Наш менеджер зв'яжеться з вами найближчим часом. Якщо цього не сталося, будь ласка, зв'яжіться з нами."
                  )
-                 # Клавиатура с поддержкой уже есть, но заменим на универсальную
                  await query.message.edit_text(
                      support_message,
-                     reply_markup=universal_keyboard # Добавляем универсальную клавиатуру
+                     reply_markup=universal_keyboard
                  )
-             # --- КОНЕЦ ИЗМЕНЕНИЙ ---
-             
              context.user_data.pop('pending_order', None)
         else:
             await query.message.edit_text("ℹ️ Інформація про оплату вже оброблена або відсутня.")
@@ -1098,21 +1079,18 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
                 except Exception as e:
                     logger.error(f"Не вдалося відправити повідомлення власнику {owner_id}: {e}")
             
-            # --- НАЧАЛО ИЗМЕНЕНИЙ ---
             universal_keyboard = get_universal_menu_keyboard()
 
             if success:
                 await query.message.edit_text(
                     "✅ Дякуємо за оплату! Ми зв'яжемося з вами найближчим часом для підтвердження замовлення.",
-                    reply_markup=universal_keyboard # Добавляем универсальную клавиатуру
+                    reply_markup=universal_keyboard
                 )
             else:
                 await query.message.edit_text(
                     "✅ Дякуємо за оплату! Виникла помилка при відправці сповіщення, але оплата прийнята.",
-                    reply_markup=universal_keyboard # Добавляем универсальную клавиатуру
+                    reply_markup=universal_keyboard
                 )
-            # --- КОНЕЦ ИЗМЕНЕНИЙ ---
-            
             context.user_data.pop('pending_order_from_command', None)
         else:
             await query.message.edit_text("ℹ️ Інформація про оплату вже оброблена або відсутня.")
@@ -1155,21 +1133,18 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
                 except Exception as e:
                     logger.error(f"Не удалось отправить данные владельцу {owner_id}: {e}")
             
-            # --- НАЧАЛО ИЗМЕНЕНИЙ ---
             universal_keyboard = get_universal_menu_keyboard()
 
             if success:
                 await update.message.reply_text(
                     "✅ Дякуємо! Дані отримано. Наш менеджер зв'яжеться з вами найближчим часом.",
-                    reply_markup=universal_keyboard # Добавляем универсальную клавиатуру
+                    reply_markup=universal_keyboard
                 )
             else:
                 await update.message.reply_text(
                     "❌ Виникла помилка при відправці даних. Спробуйте ще раз пізніше або зв'яжіться з підтримкою.",
-                    reply_markup=universal_keyboard # Добавляем универсальную клавиатуру
+                    reply_markup=universal_keyboard
                 )
-            # --- КОНЕЦ ИЗМЕНЕНИЙ ---
-            
             context.user_data.pop('awaiting_subscription_data', None)
             context.user_data.pop('subscription_order_details', None)
             return
@@ -1189,22 +1164,18 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         )
         try:
             await context.bot.send_message(chat_id=MANAGER_ID, text=forward_message)
-            # --- НАЧАЛО ИЗМЕНЕНИЙ ---
             universal_keyboard = get_universal_menu_keyboard()
             await update.message.reply_text(
                 "✅ Ваше запитання надіслано. Очікуйте відповіді від менеджера.",
-                reply_markup=universal_keyboard # Добавляем универсальную клавиатуру
+                reply_markup=universal_keyboard
             )
-            # --- КОНЕЦ ИЗМЕНЕНИЙ ---
         except Exception as e:
             logger.error(f"Не удалось отправить вопрос менеджеру {MANAGER_ID}: {e}")
-            # --- НАЧАЛО ИЗМЕНЕНИЙ ---
             universal_keyboard = get_universal_menu_keyboard()
             await update.message.reply_text(
                 "❌ На жаль, не вдалося надіслати ваше запитання. Спробуйте пізніше.",
-                reply_markup=universal_keyboard # Добавляем универсальную клавиатуру
+                reply_markup=universal_keyboard
             )
-            # --- КОНЕЦ ИЗМЕНЕНИЙ ---
         context.user_data.pop('conversation_type', None)
         return
     if message_text.startswith('/pay'):
@@ -1212,7 +1183,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         return
     await start(update, context)
 
-# --- ИЗМЕНЕНИЕ: Возвращена старая логика /pay ---
 async def pay_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     logger.info(f"💰 Вызов команды /pay пользователем {update.effective_user.id}")
     user = update.effective_user
