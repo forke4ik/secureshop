@@ -726,7 +726,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
                 f"{pending_order['service']} {pending_order['plan']} ({pending_order['period']})",
                 pay_currency_code
             )
-            if invoice_data and 'invoice_url' in invoice_
+            if invoice_data and 'invoice_url' in invoice_:
                 pay_url = invoice_data['invoice_url']
                 message = (
                     f"₿ Оплата криптовалютою:\n"
@@ -1042,7 +1042,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
                 "Замовлення через /pay",
                 pay_currency_code
             )
-            if invoice_data and 'invoice_url' in invoice_
+            if invoice_data and 'invoice_url' in invoice_:
                 pay_url = invoice_data['invoice_url']
                 message = (
                     f"₿ Оплата криптовалютою:\n"
@@ -1068,7 +1068,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             await query.message.edit_text("❌ Неожиданная помилка обробки оплати криптовалютою.")
     elif query.data == 'paid_after_command':
         pending_order_data = context.user_data.get('pending_order_from_command')
-        if pending_order_
+        if pending_order_:
             order_id = pending_order_data['order_id']
             total_uah = pending_order_data['total_uah']
             order_text = pending_order_data['order_text']
@@ -1115,7 +1115,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             await query.message.edit_text("ℹ️ Інформація про оплату вже оброблена або відсутня.")
     elif query.data == 'cancel_payment_command':
         pending_order_data = context.user_data.get('pending_order_from_command')
-        if pending_order_
+        if pending_order_:
             await query.message.edit_text(
                 f"❌ Оплата скасована.\n"
                 f"Номер замовлення: #{pending_order_data['order_id']}\n"
@@ -1133,7 +1133,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     message_text = update.message.text
     ensure_user_exists(user)
     awaiting_data = context.user_data.get('awaiting_subscription_data', False)
-    if awaiting_
+    if awaiting_:
         subscription_details = context.user_data.get('subscription_order_details', {})
         if subscription_details:
             data_message = (
@@ -1264,7 +1264,7 @@ async def pay_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
             logger.error(f"Не удалось отправить заказ владельцу {owner_id}: {e}")
     
     invoice_data = create_nowpayments_invoice(total_uah, order_id, "Замовлення через /pay")
-    if invoice_data and 'invoice_url' in invoice_
+    if invoice_data and 'invoice_url' in invoice_:
         pay_url = invoice_data['invoice_url']
         payment_message = (
             f"✅ Дякуємо за замовлення #{order_id}!\n"
@@ -1357,3 +1357,4 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
+
