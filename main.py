@@ -1032,7 +1032,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             price = int(parts[4])
             pay_currency_code = parts[5]
             pending_order_data = context.user_data.get('pending_order_from_command')
-            if not pending_order_
+            if not pending_order_:
                 await query.message.edit_text("❌ Помилка: інформація про замовлення відсутня.")
                 return
             currency_name = next((name for name, code in AVAILABLE_CURRENCIES.items() if code == pay_currency_code), pay_currency_code)
@@ -1357,4 +1357,5 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
+
 
