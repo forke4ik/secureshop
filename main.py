@@ -311,24 +311,16 @@ def ensure_user_exists(user):
 # Функция для отправки уведомления о заказе (обновлена)
 async def send_order_notification(context, user, pending_order):
     if pending_order.get('type') == 'subscription':
-        order_summary_for_owner = (
-            f"🛍️ НОВЕ ЗАМОВЛЕННЯ (Підписка) #{pending_order['order_id']}
-"
-            f"👤 Клієнт: @{user.username or user.first_name} (ID: {user.id})
-"
-            f"📦 Деталі замовлення:
-"
-            f"▫️ Сервіс: {pending_order['service']}
-"
-            f"▫️ План: {pending_order['plan']}
-"
-            f"▫️ Період: {pending_order['period']}
-"
-            f"▫️ Сума: {pending_order['price']} UAH
-"
-            f"💳 ЗАГАЛЬНА СУМА: {pending_order['price']} UAH
-"
-        )
+order_summary_for_owner = (
+    f"🛍️ НОВЕ ЗАМОВЛЕННЯ (Підписка) #{pending_order['order_id']}\n"
+    f"👤 Клієнт: @{user.username or user.first_name} (ID: {user.id})\n"
+    f"📦 Деталі замовлення:\n"
+    f"▫️ Сервіс: {pending_order['service']}\n"
+    f"▫️ План: {pending_order['plan']}\n"
+    f"▫️ Період: {pending_order['period']}\n"
+    f"▫️ Сума: {pending_order['price']} UAH\n"
+    f"💳 ЗАГАЛЬНА СУМА: {pending_order['price']} UAH"
+)
         # Отправка менеджеру
         if MANAGER_ID:
             try:
@@ -1125,3 +1117,4 @@ def main() -> None:
     application.run_polling(allowed_updates=Update.ALL_TYPES)
 if __name__ == "__main__":
     main()
+
