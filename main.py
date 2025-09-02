@@ -40,9 +40,9 @@ from config import (
     NOWPAYMENTS_IPN_SECRET,
     PAYMENT_CURRENCY,
     CARD_NUMBER,
+    SECURE_SUPPORT_ID, # Импортируем ID менеджера
 )
 from products_config import SUBSCRIPTIONS, DIGITAL_PRODUCTS, DIGITAL_PRODUCT_MAP
-
 logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", level=logging.INFO
 )
@@ -51,7 +51,7 @@ logger = logging.getLogger(__name__)
 bot_running = False
 bot_lock = threading.Lock()
 OWNER_IDS = [id for id in [OWNER_ID_1, OWNER_ID_2] if id is not None]
-MANAGER_ID = int(os.environ.get('SECURE_SUPPORT_ID', 0))
+MANAGER_ID = SECURE_SUPPORT_ID # Используем ID менеджера из config.py
 NOWPAYMENTS_API_URL = "https://api.nowpayments.io/v1"
 AVAILABLE_CURRENCIES = {
     "USDT (Solana)": "usdtsol",
@@ -63,7 +63,6 @@ AVAILABLE_CURRENCIES = {
     "AVAX (C-Chain)": "avax",
     "APTOS (APT)": "apt"
 }
-
 def get_universal_menu_keyboard():
     keyboard = [
         [InlineKeyboardButton("📋 Головне меню", callback_data="back_to_main")],
@@ -72,7 +71,6 @@ def get_universal_menu_keyboard():
         [InlineKeyboardButton("❓ Задати питання", callback_data="question")],
     ]
     return InlineKeyboardMarkup(keyboard)
-
 def init_db():
     try:
         with psycopg.connect(DATABASE_URL) as conn:
@@ -122,7 +120,6 @@ def init_db():
                 conn.commit()
     except Exception as e:
         logger.error(f"Ошибка инициализации базы данных: {e}")
-
 def get_stats():
     try:
         with psycopg.connect(DATABASE_URL) as conn:
@@ -132,7 +129,6 @@ def get_stats():
     except Exception as e:
         logger.error(f"Ошибка получения статистики: {e}")
         return {'total_orders': 0, 'total_questions': 0}
-
 def increment_orders():
     try:
         with psycopg.connect(DATABASE_URL) as conn:
@@ -141,7 +137,6 @@ def increment_orders():
                 conn.commit()
     except Exception as e:
         logger.error(f"Ошибка увеличения счетчика заказов: {e}")
-
 def increment_questions():
     try:
         with psycopg.connect(DATABASE_URL) as conn:
@@ -150,7 +145,6 @@ def increment_questions():
                 conn.commit()
     except Exception as e:
         logger.error(f"Ошибка увеличения счетчика вопросов: {e}")
-
 def save_user(user):
     try:
         with psycopg.connect(DATABASE_URL) as conn:
@@ -168,7 +162,6 @@ def save_user(user):
                 conn.commit()
     except Exception as e:
         logger.error(f"Ошибка сохранения пользователя {user.id}: {e}")
-
 def get_total_users_count():
     try:
         with psycopg.connect(DATABASE_URL) as conn:
@@ -178,7 +171,6 @@ def get_total_users_count():
     except Exception as e:
         logger.error(f"Ошибка получения количества пользователей: {e}")
         return 0
-
 def get_all_users():
     try:
         with psycopg.connect(DATABASE_URL) as conn:
@@ -188,7 +180,6 @@ def get_all_users():
     except Exception as e:
         logger.error(f"Ошибка получения пользователей: {e}")
         return []
-
 def save_question(user_id, message):
     try:
         with psycopg.connect(DATABASE_URL) as conn:
@@ -200,7 +191,6 @@ def save_question(user_id, message):
                 conn.commit()
     except Exception as e:
         logger.error(f"Ошибка сохранения вопроса от {user_id}: {e}")
-
 def get_active_questions_count():
     try:
         with psycopg.connect(DATABASE_URL) as conn:
@@ -210,7 +200,6 @@ def get_active_questions_count():
     except Exception as e:
         logger.error(f"Ошибка получения количества активных вопросов: {e}")
         return 0
-
 def save_order(user_id, order_id, items, total_uah):
     try:
         with psycopg.connect(DATABASE_URL) as conn:
@@ -222,7 +211,6 @@ def save_order(user_id, order_id, items, total_uah):
                 conn.commit()
     except Exception as e:
         logger.error(f"Ошибка сохранения заказа {order_id}: {e}")
-
 def get_orders_count():
     try:
         with psycopg.connect(DATABASE_URL) as conn:
@@ -232,12 +220,10 @@ def get_orders_count():
     except Exception as e:
         logger.error(f"Ошибка получения количества заказов: {e}")
         return 0
-
 PING_INTERVAL = 60 * 5
 WEBHOOK_URL = os.environ.get('RENDER_EXTERNAL_URL') or "http://localhost:10000"
 ping_running = False
 ping_thread = None
-
 def ping_loop():
     global ping_running
     ping_url = f"{WEBHOOK_URL}/health"
@@ -261,7 +247,6 @@ def ping_loop():
         except Exception as e:
             logger.error(f"❌ Неожиданная ошибка ping: {e}")
         time.sleep(PING_INTERVAL)
-
 def start_ping_service():
     global ping_running, ping_thread
     if not ping_running:
@@ -269,12 +254,10 @@ def start_ping_service():
         ping_thread = threading.Thread(target=ping_loop, daemon=True)
         ping_thread.start()
         logger.info("🔁 Сервис пингования запущен.")
-
 def stop_ping_service():
     global ping_running
     ping_running = False
     logger.info("⏹️ Сервис пингования остановлен.")
-
 class HealthCheckHandler(BaseHTTPRequestHandler):
     def do_GET(self):
         if self.path == '/health':
@@ -295,7 +278,6 @@ class HealthCheckHandler(BaseHTTPRequestHandler):
         else:
             self.send_response(404)
             self.end_headers()
-
 def start_http_server(port):
     try:
         httpd = socketserver.TCPServer(("", port), HealthCheckHandler)
@@ -308,9 +290,7 @@ def start_http_server(port):
             logger.error(f"❌ Ошибка запуска HTTP сервера: {e}")
     except Exception as e:
         logger.error(f"❌ Неожиданная ошибка HTTP сервера: {e}")
-
 users_db = {}
-
 def ensure_user_exists(user):
     try:
         if user.id not in users_db:
@@ -328,47 +308,183 @@ def ensure_user_exists(user):
     except Exception as e:
         logger.error(f"Ошибка при добавлении/обновлении пользователя {user.id}: {e}")
 
-def create_nowpayments_invoice(price_amount, order_id, product_name, pay_currency="usdtsol"):
-    logger.info(
-        f"🧾 Создание инвойса NOWPayments: сумма {price_amount} {PAYMENT_CURRENCY}, заказ {order_id}, валюта оплаты {pay_currency}"
-    )
-    if not NOWPAYMENTS_API_KEY or NOWPAYMENTS_API_KEY in ['YOUR_NOWPAYMENTS_API_KEY_HERE', '']:
-        logger.error("🔑 NOWPayments API ключ не установлен или имеет значение по умолчанию!")
-        return {"error": "API ключ не настроен"}
-    url = f"{NOWPAYMENTS_API_URL}/invoice"
-    headers = {
-        "x-api-key": NOWPAYMENTS_API_KEY,
-        "Content-Type": "application/json",
-        "Accept": "application/json",
-    }
-    try:
-        price_amount = int(price_amount)
-    except (ValueError, TypeError) as e:
-        logger.error(f"❌ Ошибка преобразования суммы в число: {e}")
-        return {"error": "Некорректная сумма"}
-    payload = {
-        "price_amount": price_amount,
-        "price_currency": PAYMENT_CURRENCY,
-        "pay_currency": pay_currency,
-        "order_id": order_id,
-        "order_description": f"Оплата за {product_name}",
-        "ipn_callback_url": f"{WEBHOOK_URL}/ipn", 
-        "success_url": "https://t.me/SecureShopBot",
-        "cancel_url": "https://t.me/SecureShopBot",   
-    }
-    try:
-        response = requests.post(url, json=payload, headers=headers, timeout=10)
-        logger.info(f"🧾 Статус ответа NOWPayments: {response.status_code}")
-        if response.status_code in [200, 201]:
-            return response.json()
+# Функция для отправки уведомления о заказе (обновлена)
+async def send_order_notification(context, user, pending_order):
+    if pending_order.get('type') == 'subscription':
+        order_summary_for_owner = (
+            f"🛍️ НОВЕ ЗАМОВЛЕННЯ (Підписка) #{pending_order['order_id']}
+"
+            f"👤 Клієнт: @{user.username or user.first_name} (ID: {user.id})
+"
+            f"📦 Деталі замовлення:
+"
+            f"▫️ Сервіс: {pending_order['service']}
+"
+            f"▫️ План: {pending_order['plan']}
+"
+            f"▫️ Період: {pending_order['period']}
+"
+            f"▫️ Сума: {pending_order['price']} UAH
+"
+            f"💳 ЗАГАЛЬНА СУМА: {pending_order['price']} UAH
+"
+        )
+        # Отправка менеджеру
+        if MANAGER_ID:
+            try:
+                await context.bot.send_message(
+                    chat_id=MANAGER_ID,
+                    text=order_summary_for_owner
+                )
+                logger.info(f"✅ Уведомление о заказе отправлено менеджеру {MANAGER_ID}")
+            except Exception as e:
+                logger.error(f"❌ Не удалось отправить уведомление менеджеру {MANAGER_ID}: {e}")
+
+        # Отправка владельцам
+        success = False
+        for owner_id in OWNER_IDS:
+            try:
+                await context.bot.send_message(
+                    chat_id=owner_id,
+                    text=order_summary_for_owner
+                )
+                success = True
+                logger.info(f"✅ Уведомление о заказе отправлено владельцу {owner_id}")
+            except Exception as e:
+                logger.error(f"❌ Не удалось отправить уведомление владельцу {owner_id}: {e}")
+
+        # Ответ пользователю
+        special_message_needed = False
+        if (pending_order.get('service') == SUBSCRIPTIONS.get('duolingo', {}).get('name', 'Duolingo') and
+            pending_order.get('plan') == SUBSCRIPTIONS.get('duolingo', {}).get('plans', {}).get('fam', {}).get('name', 'Family') and
+            pending_order.get('price') == 380):
+            special_message_needed = True
+
+        universal_keyboard = get_universal_menu_keyboard()
+        if special_message_needed:
+            if user.username:
+                # Уведомление для Duolingo Family
+                await context.bot.send_message(
+                    chat_id=user.id,
+                    text="✅ Дякуємо за замовлення!
+"
+                         "Ваш акаунт буде додано до сімейної підписки Duolingo протягом 10 хвилин.
+"
+                         "Якщо цього не сталося, зверніться до служби підтримки.",
+                    reply_markup=universal_keyboard
+                )
+            else:
+                # Уведомление для Duolingo Family без username
+                support_message = (
+                    "✅ Дякуємо за замовлення!
+"
+                    "Ваш акаунт буде додано до сімейної підписки Duolingo протягом 10 хвилин.
+"
+                    "Якщо цього не сталося, зверніться до служби підтримки."
+                )
+                support_keyboard = [
+                    [InlineKeyboardButton("💬 Зв'язатися з підтримкою", url="https://t.me/SecureSupport")],
+                    [InlineKeyboardButton("📋 Головне меню", callback_data="back_to_main")],
+                    [InlineKeyboardButton("📜 Правила", url="https://drive.google.com/file/d/1t5jQWCCJeimM8lJ132M7oTRKRG7t3dug/view?usp=drivesdk")],
+                    [InlineKeyboardButton("ℹ️ Допомога", callback_data="help")],
+                    [InlineKeyboardButton("❓ Задати питання", callback_data="question")],
+                ]
+                await context.bot.send_message(
+                    chat_id=user.id,
+                    text=support_message,
+                    reply_markup=InlineKeyboardMarkup(support_keyboard)
+                )
         else:
-            logger.error(
-                f"🧾 Ошибка NOWPayments при создании инвойса: {response.status_code} - {response.text}"
+            if user.username:
+                # Уведомление с просьбой отправить логин/пароль
+                await context.bot.send_message(
+                    chat_id=user.id,
+                    text="✅ Дякуємо за замовлення! Для завершення, будь ласка, надішліть мені ваш логін та пароль для сервісу в наступному повідомленні.",
+                    reply_markup=universal_keyboard
+                )
+                # Устанавливаем флаг ожидания данных
+                context.user_data['awaiting_subscription_data'] = True
+                context.user_data['subscription_order_details'] = pending_order
+            else:
+                # Уведомление без username
+                support_message = (
+                    "✅ Дякуємо за замовлення!
+"
+                    "Для завершення, будь ласка, зв'яжіться з нашою службою підтримки.
+"
+                    "Натисніть кнопку нижче, щоб перейти до чату з оператором."
+                )
+                support_keyboard = [
+                    [InlineKeyboardButton("💬 Зв'язатися з підтримкою", url="https://t.me/SecureSupport")],
+                    [InlineKeyboardButton("📋 Головне меню", callback_data="back_to_main")],
+                    [InlineKeyboardButton("📜 Правила", url="https://drive.google.com/file/d/1t5jQWCCJeimM8lJ132M7oTRKRG7t3dug/view?usp=drivesdk")],
+                    [InlineKeyboardButton("ℹ️ Допомога", callback_data="help")],
+                    [InlineKeyboardButton("❓ Задати питання", callback_data="question")],
+                ]
+                await context.bot.send_message(
+                    chat_id=user.id,
+                    text=support_message,
+                    reply_markup=InlineKeyboardMarkup(support_keyboard)
+                )
+
+    elif pending_order.get('type') == 'digital':
+        order_summary_for_owner = (
+            f"🛍️ НОВЕ ЗАМОВЛЕННЯ (Цифровий товар) #{pending_order['order_id']}
+"
+            f"👤 Клієнт: @{user.username or user.first_name} (ID: {user.id})
+"
+            f"📦 Деталі замовлення:
+"
+            f"▫️ Товар: {pending_order['plan']}
+"
+            f"▫️ Сума: {pending_order['price']} UAH
+"
+            f"💳 ЗАГАЛЬНА СУМА: {pending_order['price']} UAH
+"
+        )
+        # Отправка менеджеру
+        if MANAGER_ID:
+            try:
+                await context.bot.send_message(
+                    chat_id=MANAGER_ID,
+                    text=order_summary_for_owner
+                )
+                logger.info(f"✅ Уведомление о цифровом заказе отправлено менеджеру {MANAGER_ID}")
+            except Exception as e:
+                logger.error(f"❌ Не удалось отправить уведомление менеджеру {MANAGER_ID}: {e}")
+
+        # Отправка владельцам
+        success = False
+        for owner_id in OWNER_IDS:
+            try:
+                await context.bot.send_message(
+                    chat_id=owner_id,
+                    text=order_summary_for_owner
+                )
+                success = True
+                logger.info(f"✅ Уведомление о цифровом заказе отправлено владельцу {owner_id}")
+            except Exception as e:
+                logger.error(f"❌ Не удалось отправить уведомление владельцу {owner_id}: {e}")
+
+        # Ответ пользователю
+        universal_keyboard = get_universal_menu_keyboard()
+        if user.username:
+            await context.bot.send_message(
+                chat_id=user.id,
+                text="✅ Дякуємо за замовлення! Наш менеджер зв'яжеться з вами найближчим часом для передачі товару.",
+                reply_markup=universal_keyboard
             )
-            return {"error": f"Ошибка API: {response.status_code}"}
-    except Exception as e:
-        logger.error(f"🧾 Исключение при создании инвойса NOWPayments: {e}")
-        return {"error": f"Исключение: {e}"}
+        else:
+             support_message = (
+                 "✅ Дякуємо за замовлення!
+"
+                 "Наш менеджер зв'яжеться з вами найближчим часом. Якщо цього не сталося, будь ласка, зв'яжіться з нами."
+             )
+             await context.bot.send_message(
+                 chat_id=user.id,
+                 text=support_message,
+                 reply_markup=universal_keyboard
+             )
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     logger.info(f"🚀 Вызов /start пользователем {update.effective_user.id}")
@@ -380,7 +496,8 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             [InlineKeyboardButton("📊 Статистика", callback_data="stats")],
         ]
         reply_markup = InlineKeyboardMarkup(keyboard)
-        greeting = f"👋 Привіт, {user.first_name}!\nВи є власником цього бота."
+        greeting = f"👋 Привіт, {user.first_name}!
+Ви є власником цього бота."
         await update.message.reply_text(greeting, reply_markup=reply_markup)
     else:
         keyboard = [
@@ -391,26 +508,33 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             [InlineKeyboardButton("📜 Правила", url="https://drive.google.com/file/d/1t5jQWCCJeimM8lJ132M7oTRKRG7t3dug/view?usp=drivesdk")],
         ]
         reply_markup = InlineKeyboardMarkup(keyboard)
-        greeting = f"👋 Привіт, {user.first_name}!\nЛаскаво просимо до SecureShop!"
+        greeting = f"👋 Привіт, {user.first_name}!
+Ласкаво просимо до SecureShop!"
         await update.message.reply_text(greeting, reply_markup=reply_markup)
-
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     logger.info(f"📖 Вызов /help пользователем {update.effective_user.id}")
     help_text = (
-        "👋 Доброго дня! Я бот магазину SecureShop.\n"
+        "👋 Доброго дня! Я бот магазину SecureShop.
+"
         "🔐 Наш сервіс купує підписки на ваш готовий акаунт, а не дає вам свій. "
         "Ми дуже стараємось бути з клієнтами, тому відповіді на будь-які питання "
-        "по нашому сервісу можна задавати цілодобово.\n"
-        "📌 Список доступних команд:\n"
-        "/start - Головне меню\n"
-        "/help - Ця довідка\n"
-        "/order - Зробити замовлення\n"
-        "/question - Поставити запитання\n"
-        "/channel - Наш головний канал\n"
+        "по нашому сервісу можна задавати цілодобово.
+"
+        "📌 Список доступних команд:
+"
+        "/start - Головне меню
+"
+        "/help - Ця довідка
+"
+        "/order - Зробити замовлення
+"
+        "/question - Поставити запитання
+"
+        "/channel - Наш головний канал
+"
         "Також ви можете відправити команду `/pay` з сайту для оформлення замовлення."
     )
     await update.message.reply_text(help_text)
-
 async def channel_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     logger.info(f"📢 Вызов /channel пользователем {update.effective_user.id}")
     keyboard = [
@@ -418,16 +542,21 @@ async def channel_command(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
     message_text = (
-        "📢 Наш головний канал з асортиментом, оновленнями та розіграшами:\n"
-        "👉 Тут ви знайдете:\n"
-        "- 🆕 Актуальні товари та послуги\n"
-        "- 🔥 Спеціальні пропозиції та знижки\n"
-        "- 🎁 Розіграші та акції\n"
-        "- ℹ️ Важливі оновлення сервісу\n"
+        "📢 Наш головний канал з асортиментом, оновленнями та розіграшами:
+"
+        "👉 Тут ви знайдете:
+"
+        "- 🆕 Актуальні товари та послуги
+"
+        "- 🔥 Спеціальні пропозиції та знижки
+"
+        "- 🎁 Розіграші та акції
+"
+        "- ℹ️ Важливі оновлення сервісу
+"
         "Приєднуйтесь, щоб бути в курсі всіх новин! 👇"
     )
     await update.message.reply_text(message_text, reply_markup=reply_markup)
-
 async def order_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     logger.info(f"📦 Вызов /order пользователем {update.effective_user.id}")
     keyboard = [
@@ -438,7 +567,6 @@ async def order_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     await update.message.reply_text(
         "📦 Оберіть тип товару:", reply_markup=InlineKeyboardMarkup(keyboard)
     )
-
 async def question_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     logger.info(f"❓ Вызов /question пользователем {update.effective_user.id}")
     user = update.effective_user
@@ -447,7 +575,6 @@ async def question_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     await update.message.reply_text(
         "📝 Напишіть ваше запитання. Я передам його менеджеру магазину."
     )
-
 async def stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     logger.info(f"📈 Вызов /stats пользователем {update.effective_user.id}")
     owner_id = update.effective_user.id
@@ -459,18 +586,22 @@ async def stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         active_questions_db = get_active_questions_count()
         orders_db = get_orders_count()
         stats_message = (
-            f"📊 Статистика бота:\n"
-            f"👤 Усього користувачів (БД): {total_users_db}\n"
-            f"🛒 Усього замовлень (БД): {stats['total_orders']}\n"
-            f"❓ Усього запитаннь (БД): {stats['total_questions']}\n"
-            f"👥 Активних запитаннь (БД): {active_questions_db}\n"
+            f"📊 Статистика бота:
+"
+            f"👤 Усього користувачів (БД): {total_users_db}
+"
+            f"🛒 Усього замовлень (БД): {stats['total_orders']}
+"
+            f"❓ Усього запитаннь (БД): {stats['total_questions']}
+"
+            f"👥 Активних запитаннь (БД): {active_questions_db}
+"
             f"📦 Усього записаних замовлень (БД): {orders_db}"
         )
         await update.message.reply_text(stats_message)
     except Exception as e:
         logger.error(f"Ошибка получения статистики из БД: {e}")
         await update.message.reply_text("❌ Помилка при отриманні статистики з бази даних.")
-
 async def export_users_json(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     logger.info(f"📁 Вызов /json пользователем {update.effective_user.id}")
     owner_id = update.effective_user.id
@@ -503,7 +634,6 @@ async def export_users_json(update: Update, context: ContextTypes.DEFAULT_TYPE) 
     except Exception as e:
         logger.error(f"Ошибка экспорта пользователей в JSON: {e}")
         await update.message.reply_text("❌ Помилка при експорті користувачів у JSON.")
-
 async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     query = update.callback_query
     await query.answer()
@@ -511,7 +641,6 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     user_id = user.id
     ensure_user_exists(user)
     logger.info(f"🔘 Получен callback запрос: {query.data} от пользователя {user_id}")
-    
     if query.data == "order":
         keyboard = [
             [InlineKeyboardButton("💳 Підписки", callback_data="order_subscriptions")],
@@ -535,16 +664,24 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             )
     elif query.data == "help":
         help_text = (
-            "👋 Доброго дня! Я бот магазину SecureShop.\n"
+            "👋 Доброго дня! Я бот магазину SecureShop.
+"
             "🔐 Наш сервіс купує підписки на ваш готовий акаунт, а не дає вам свій. "
             "Ми дуже стараємось бути з клієнтами, тому відповіді на будь-які питання "
-            "по нашому сервісу можна задавати цілодобово.\n"
-            "📌 Список доступних команд:\n"
-            "/start - Головне меню\n"
-            "/help - Ця довідка\n"
-            "/order - Зробити замовлення\n"
-            "/question - Поставити запитання\n"
-            "/channel - Наш головний канал\n"
+            "по нашому сервісу можна задавати цілодобово.
+"
+            "📌 Список доступних команд:
+"
+            "/start - Головне меню
+"
+            "/help - Ця довідка
+"
+            "/order - Зробити замовлення
+"
+            "/question - Поставити запитання
+"
+            "/channel - Наш головний канал
+"
             "Також ви можете відправити команду `/pay` з сайту для оформлення замовлення."
         )
         await query.message.edit_text(help_text)
@@ -552,12 +689,18 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         keyboard = [[InlineKeyboardButton("📢 Перейти в SecureShopUA", url="https://t.me/SecureShopUA")]]
         reply_markup = InlineKeyboardMarkup(keyboard)
         message_text = (
-            "📢 Наш головний канал з асортиментом, оновленнями та розіграшами:\n"
-            "👉 Тут ви знайдете:\n"
-            "- 🆕 Актуальні товари та послуги\n"
-            "- 🔥 Спеціальні пропозиції та знижки\n"
-            "- 🎁 Розіграші та акції\n"
-            "- ℹ️ Важливі оновлення сервісу\n"
+            "📢 Наш головний канал з асортиментом, оновленнями та розіграшами:
+"
+            "👉 Тут ви знайдете:
+"
+            "- 🆕 Актуальні товари та послуги
+"
+            "- 🔥 Спеціальні пропозиції та знижки
+"
+            "- 🎁 Розіграші та акції
+"
+            "- ℹ️ Важливі оновлення сервісу
+"
             "Приєднуйтесь, щоб бути в курсі всіх новин! 👇"
         )
         await query.message.edit_text(message_text, reply_markup=reply_markup)
@@ -568,7 +711,8 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
                 [InlineKeyboardButton("📊 Статистика", callback_data="stats")],
             ]
             reply_markup = InlineKeyboardMarkup(keyboard)
-            greeting = f"👋 Привіт, {user.first_name}!\nВи є власником цього бота."
+            greeting = f"👋 Привіт, {user.first_name}!
+Ви є власником цього бота."
             await query.message.edit_text(greeting, reply_markup=reply_markup)
         else:
             keyboard = [
@@ -579,7 +723,8 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
                 [InlineKeyboardButton("📜 Правила", url="https://drive.google.com/file/d/1t5jQWCCJeimM8lJ132M7oTRKRG7t3dug/view?usp=drivesdk")],
             ]
             reply_markup = InlineKeyboardMarkup(keyboard)
-            greeting = f"👋 Привіт, {user.first_name}!\nЛаскаво просимо до SecureShop!"
+            greeting = f"👋 Привіт, {user.first_name}!
+Ласкаво просимо до SecureShop!"
             await query.message.edit_text(greeting, reply_markup=reply_markup)
     elif query.data == "order_subscriptions":
         keyboard = []
@@ -609,7 +754,8 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
                     keyboard.append([InlineKeyboardButton(f"{option['period']} - {option['price']} UAH", callback_data=callback_data)])
                 keyboard.append([InlineKeyboardButton("⬅️ Назад", callback_data=f'service_{service_key}')])
                 await query.message.edit_text(
-                    f"🛒 {service['name']} {plan_data['name']}\nОберіть період:",
+                    f"🛒 {service['name']} {plan_data['name']}
+Оберіть період:",
                     reply_markup=InlineKeyboardMarkup(keyboard)
                 )
     elif query.data.startswith('add_'):
@@ -620,8 +766,8 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
              return
         service_key = parts[1]
         plan_key = parts[2]
-        price_str = parts[-1] 
-        period_parts = parts[3:-1] 
+        price_str = parts[-1]
+        period_parts = parts[3:-1]
         period_key = "_".join(period_parts)
         period = period_key.replace('_', ' ')
         try:
@@ -642,260 +788,42 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
                     'command': command,
                     'type': 'subscription'
                 }
-                message = (
-                    f"🛍️ Ваше замовлення готове!\n"
-                    f"Скопіюйте цю команду та відправте її боту для підтвердження:\n"
-                    f"<code>{command}</code>\n"
-                    f"Або оберіть спосіб оплати нижче."
-                )
-                keyboard = [
-                    [InlineKeyboardButton("💳 Оплатити карткою", callback_data=f"pay_card_{price}")],
-                    [InlineKeyboardButton("₿ Оплатити криптовалютою", callback_data=f"select_crypto_{price}")],
-                    [InlineKeyboardButton("📋 Головне меню", callback_data='back_to_main')]
-                ]
-                await query.message.edit_text(message, parse_mode='HTML', reply_markup=InlineKeyboardMarkup(keyboard))
+
+                # Сохраняем заказ в БД
+                try:
+                    items_str = f"{service['name']} {service['plans'][plan_key]['name']} ({period}) - {price} UAH"
+                    save_order(user_id, order_id, items_str, price)
+                    increment_orders()
+                except Exception as e:
+                    logger.error(f"Ошибка сохранения заказа: {e}")
+
+                # Отправляем уведомление владельцам и менеджеру
+                await send_order_notification(context, user, context.user_data['pending_order'])
+
+                # Удаляем временные данные
+                context.user_data.pop('pending_order', None)
+
+                # Сообщение пользователю уже отправлено в send_order_notification
+                # Можно здесь ничего не делать или показать меню
+                # await query.message.edit_text("✅ Замовлення прийнято! Дякуємо.", reply_markup=get_universal_menu_keyboard())
             else:
                 await query.message.edit_text("❌ Помилка: сервіс або план не знайдено.")
         except (ValueError, IndexError) as e:
             logger.error(f"Ошибка обработки add_ callback: {e}")
             await query.message.edit_text("❌ Помилка обробки вибору періоду.")
-    elif query.data.startswith('pay_card_'):
-        try:
-            price_str = query.data.split('_')[2]
-            price = int(price_str)
-            pending_order = context.user_data.get('pending_order')
-            if not pending_order:
-                await query.message.edit_text("❌ Помилка: інформація про замовлення відсутня.")
-                return
-            formatted_card_number = f"`{CARD_NUMBER}`"
-            message = (
-                f"💳 Оплата карткою:\n"
-                f"Сума: {price} UAH\n"
-                f"Номер картки: {formatted_card_number}\n"
-                f"(Натисніть на номер, щоб скопіювати)\n"
-                f"Призначення платежу: Оплата за {pending_order['service']} {pending_order['plan']} ({pending_order['period']})\n"
-                f"Після оплати натисніть кнопку нижче."
-            )
-            keyboard = [
-                [InlineKeyboardButton("✅ Оплачено", callback_data='paid_card')],
-                [InlineKeyboardButton("❌ Скасувати", callback_data='cancel_payment')]
-            ]
-            await query.message.edit_text(
-                message, 
-                parse_mode='Markdown',
-                reply_markup=InlineKeyboardMarkup(keyboard)
-            )
-        except (ValueError, IndexError) as e:
-            logger.error(f"Ошибка обработки оплаты картой: {e}")
-            await query.message.edit_text("❌ Помилка обробки оплати карткою.")
-        except Exception as e:
-            logger.error(f"Неожиданная ошибка при обработке оплаты картой: {e}")
-            await query.message.edit_text("❌ Неожиданная помилка обробки оплати карткою.")
-    elif query.data.startswith('select_crypto_'):
-        try:
-            price_str = query.data.split('_')[2]
-            price = int(price_str)
-            keyboard = []
-            for name, code in AVAILABLE_CURRENCIES.items():
-                callback_data = f"pay_crypto_{price}_{code}"
-                keyboard.append([InlineKeyboardButton(name, callback_data=callback_data)])
-            keyboard.append([InlineKeyboardButton("❌ Скасувати", callback_data='cancel_payment')])
-            await query.message.edit_text(
-                f"Оберіть криптовалюту для оплати {price} UAH:",
-                reply_markup=InlineKeyboardMarkup(keyboard)
-            )
-        except (ValueError, IndexError) as e:
-            logger.error(f"Ошибка обработки выбора криптовалюты: {e}")
-            await query.message.edit_text("❌ Помилка обробки вибору криптовалюти.")
-        except Exception as e:
-            logger.error(f"Неожиданная ошибка при обработке выбора криптовалюты: {e}")
-            await query.message.edit_text("❌ Неожиданная помилка обробки вибору криптовалюти.")
-    elif query.data.startswith('pay_crypto_'):
-        try:
-            parts = query.data.split('_')
-            if len(parts) < 4 or not parts[2].isdigit():
-                raise ValueError("Некорректный формат callback_data для оплаты криптовалютой")
-            price = int(parts[2])
-            pay_currency_code = parts[3]
-            pending_order = context.user_data.get('pending_order')
-            if not pending_order:
-                await query.message.edit_text("❌ Помилка: інформація про замовлення відсутня.")
-                return
-            currency_name = next((name for name, code in AVAILABLE_CURRENCIES.items() if code == pay_currency_code), pay_currency_code)
-            invoice_data = create_nowpayments_invoice(
-                price, 
-                pending_order['order_id'], 
-                f"{pending_order['service']} {pending_order['plan']} ({pending_order['period']})",
-                pay_currency_code
-            )
-            if invoice_data and 'invoice_url' in invoice_data:
-                pay_url = invoice_data['invoice_url']
-                message = (
-                    f"₿ Оплата криптовалютою:\n"
-                    f"Сума: {price} UAH\n"
-                    f"Валюта: {currency_name}\n"
-                    f"Натисніть кнопку нижче для переходу до оплати.\n"
-                    f"Після оплати натисніть кнопку \"✅ Оплачено\"."
-                )
-                keyboard = [
-                    [InlineKeyboardButton("🔗 Перейти до оплати", url=pay_url)],
-                    [InlineKeyboardButton("✅ Оплачено", callback_data='paid_crypto')],
-                    [InlineKeyboardButton("❌ Скасувати", callback_data='cancel_payment')]
-                ]
-                await query.message.edit_text(message, reply_markup=InlineKeyboardMarkup(keyboard))
-            else:
-                error_msg = invoice_data.get('error', 'Невідома помилка') if invoice_data else 'Невідома помилка'
-                await query.message.edit_text(f"❌ Помилка створення інвойсу для оплати криптовалютою: {error_msg}")
-        except (ValueError, IndexError) as e:
-            logger.error(f"Ошибка обработки оплаты криптовалютой: {e}")
-            await query.message.edit_text("❌ Помилка обробки оплати криптовалютою.")
-        except Exception as e:
-            logger.error(f"Неожиданная ошибка при обработке оплаты криптовалютой: {e}")
-            await query.message.edit_text("❌ Неожиданная помилка обробки оплати криптовалютою.")
-    elif query.data in ['paid_card', 'paid_crypto']:
-        pending_order = context.user_data.get('pending_order')
-        if pending_order and pending_order.get('type') == 'subscription':
-            try:
-                items_str = f"{pending_order['service']} {pending_order['plan']} ({pending_order['period']}) - {pending_order['price']} UAH"
-                save_order(user_id, pending_order['order_id'], items_str, pending_order['price'])
-                increment_orders()
-            except Exception as e:
-                logger.error(f"Ошибка сохранения заказа: {e}")
-            order_summary_for_owner = (
-                f"🛍️ НОВЕ ЗАМОВЛЕННЯ (Підписка) #{pending_order['order_id']}\n"
-                f"👤 Клієнт: @{user.username or user.first_name} (ID: {user_id})\n"
-                f"📦 Деталі замовлення:\n"
-                f"▫️ Сервіс: {pending_order['service']}\n"
-                f"▫️ План: {pending_order['plan']}\n"
-                f"▫️ Період: {pending_order['period']}\n"
-                f"▫️ Сума: {pending_order['price']} UAH\n"
-                f"💳 ЗАГАЛЬНА СУМА: {pending_order['price']} UAH\n"
-                f"Команда для підтвердження: <code>{pending_order['command']}</code>"
-            )
-            success = False
-            for owner_id in OWNER_IDS:
-                try:
-                    await context.bot.send_message(
-                        chat_id=owner_id, 
-                        text=order_summary_for_owner, 
-                        parse_mode='HTML'
-                    )
-                    success = True
-                except Exception as e:
-                    logger.error(f"Не удалось отправить уведомление владельцу {owner_id}: {e}")
-            
-            special_message_needed = False
-            if (pending_order.get('service') == SUBSCRIPTIONS.get('duolingo', {}).get('name', 'Duolingo') and
-                pending_order.get('plan') == SUBSCRIPTIONS.get('duolingo', {}).get('plans', {}).get('fam', {}).get('name', 'Family') and
-                pending_order.get('price') == 380):
-                special_message_needed = True
 
-            universal_keyboard = get_universal_menu_keyboard()
+    # Обработчики, связанные с оплатой, удалены
+    # elif query.data.startswith('pay_card_'): ...
+    # elif query.data.startswith('select_crypto_'): ...
+    # elif query.data.startswith('pay_crypto_'): ...
+    # elif query.data in ['paid_card', 'paid_crypto']: ...
+    # elif query.data == 'cancel_payment': ...
+    # elif query.data.startswith('pay_card_from_command_'): ...
+    # elif query.data.startswith('select_crypto_from_command_'): ...
+    # elif query.data.startswith('pay_crypto_from_command_'): ...
+    # elif query.data == 'paid_after_command': ...
+    # elif query.data == 'cancel_payment_command': ...
 
-            if special_message_needed:
-                if user.username:
-                    await query.message.edit_text(
-                        "✅ Дякуємо за оплату!\n\n"
-                        "Ваш акаунт буде додано до сімейної підписки Duolingo протягом 10 хвилин.\n"
-                        "Якщо цього не сталося, зверніться до служби підтримки.",
-                        reply_markup=universal_keyboard
-                    )
-                    context.user_data.pop('awaiting_subscription_data', None)
-                    context.user_data.pop('subscription_order_details', None)
-                else:
-                    support_message = (
-                        "✅ Дякуємо за оплату!\n\n"
-                        "Ваш акаунт буде додано до сімейної підписки Duolingo протягом 10 хвилин.\n"
-                        "Якщо цього не сталося, зверніться до служби підтримки."
-                    )
-                    await query.message.edit_text(support_message, reply_markup=universal_keyboard)
-                    context.user_data.pop('awaiting_subscription_data', None)
-                    context.user_data.pop('subscription_order_details', None)
-            else:
-                if user.username:
-                    await query.message.edit_text(
-                        "✅ Дякуємо за оплату! Для завершення замовлення, будь ласка, надішліть мені ваш логін та пароль для сервісу в наступному повідомленні.",
-                        reply_markup=universal_keyboard
-                    )
-                    context.user_data['awaiting_subscription_data'] = True
-                    context.user_data['subscription_order_details'] = pending_order
-                else:
-                     support_message = (
-                         "✅ Дякуємо за оплату!\n"
-                         "Для завершення замовлення, будь ласка, зв'яжіться з нашою службою підтримки.\n"
-                         "Натисніть кнопку нижче, щоб перейти до чату з оператором."
-                     )
-                     support_keyboard = [
-                         [InlineKeyboardButton("💬 Зв'язатися з підтримкою", url="https://t.me/SecureSupport")],
-                         [InlineKeyboardButton("📋 Головне меню", callback_data="back_to_main")],
-                         [InlineKeyboardButton("📜 Правила", url="https://drive.google.com/file/d/1t5jQWCCJeimM8lJ132M7oTRKRG7t3dug/view?usp=drivesdk")],
-                         [InlineKeyboardButton("ℹ️ Допомога", callback_data="help")],
-                         [InlineKeyboardButton("❓ Задати питання", callback_data="question")],
-                     ]
-                     await query.message.edit_text(
-                         support_message,
-                         reply_markup=InlineKeyboardMarkup(support_keyboard)
-                     )
-                     context.user_data.pop('awaiting_subscription_data', None)
-                     context.user_data.pop('subscription_order_details', None)
-            
-            context.user_data.pop('pending_order', None)
-        elif pending_order and pending_order.get('type') == 'digital':
-             try:
-                items_str = f"{pending_order['plan']} - {pending_order['price']} UAH"
-                save_order(user_id, pending_order['order_id'], items_str, pending_order['price'])
-                increment_orders()
-             except Exception as e:
-                logger.error(f"Ошибка сохранения цифрового заказа: {e}")
-             order_summary_for_owner = (
-                f"🛍️ НОВЕ ЗАМОВЛЕННЯ (Цифровий товар) #{pending_order['order_id']}\n"
-                f"👤 Клієнт: @{user.username or user.first_name} (ID: {user_id})\n"
-                f"📦 Деталі замовлення:\n"
-                f"▫️ Товар: {pending_order['plan']}\n"
-                f"▫️ Сума: {pending_order['price']} UAH\n"
-                f"💳 ЗАГАЛЬНА СУМА: {pending_order['price']} UAH\n"
-             )
-             success = False
-             for owner_id in OWNER_IDS:
-                 try:
-                     await context.bot.send_message(chat_id=owner_id, text=order_summary_for_owner)
-                     success = True
-                 except Exception as e:
-                     logger.error(f"Не удалось отправить уведомление владельцу {owner_id}: {e}")
-             
-             universal_keyboard = get_universal_menu_keyboard()
-
-             if user.username:
-                 await query.message.edit_text(
-                     "✅ Дякуємо за оплату! Наш менеджер зв'яжеться з вами найближчим часом для передачі товару.",
-                     reply_markup=universal_keyboard
-                 )
-             else:
-                 support_message = (
-                     "✅ Дякуємо за оплату!\n"
-                     "Наш менеджер зв'яжеться з вами найближчим часом. Якщо цього не сталося, будь ласка, зв'яжіться з нами."
-                 )
-                 await query.message.edit_text(
-                     support_message,
-                     reply_markup=universal_keyboard
-                 )
-             context.user_data.pop('pending_order', None)
-        else:
-            await query.message.edit_text("ℹ️ Інформація про оплату вже оброблена або відсутня.")
-    elif query.data == 'cancel_payment':
-        pending_order = context.user_data.get('pending_order')
-        if pending_order:
-            await query.message.edit_text(
-                f"❌ Оплата скасована.\n"
-                f"Сервіс: {pending_order['service']}\n"
-                f"План: {pending_order['plan']}\n"
-                f"Період: {pending_order['period']}\n"
-                f"Сума: {pending_order['price']} UAH\n"
-                f"Ви можете зробити нове замовлення через /start."
-            )
-            context.user_data.pop('pending_order', None)
-        else:
-            await query.message.edit_text("❌ Оплата вже скасована або відсутня.")
     elif query.data == "order_digital":
         keyboard = [
             [InlineKeyboardButton("🎮 Discord Украшення", callback_data="digital_discord_decor")],
@@ -952,165 +880,25 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
                 'command': command,
                 'type': 'digital'
             }
-            message = (
-                f"🛍️ Ваше замовлення готове!\n"
-                f"Скопіюйте цю команду та відправте її боту для підтвердження:\n"
-                f"<code>{command}</code>\n"
-                f"Або оберіть спосіб оплати нижче."
-            )
-            keyboard = [
-                [InlineKeyboardButton("💳 Оплатити карткою", callback_data=f"pay_card_{price}")],
-                [InlineKeyboardButton("₿ Оплатити криптовалютою", callback_data=f"select_crypto_{price}")],
-                [InlineKeyboardButton("📋 Головне меню", callback_data='back_to_main')]
-            ]
-            await query.message.edit_text(message, parse_mode='HTML', reply_markup=InlineKeyboardMarkup(keyboard))
-        else:
-            await query.message.edit_text("❌ Помилка: цифровий товар не знайдено.")
-    elif query.data.startswith('pay_card_from_command_'):
-        try:
-            price_str = query.data.split('_')[-1]
-            price = int(price_str)
-            formatted_card_number = f"`{CARD_NUMBER}`"
-            message = (
-                f"💳 Оплата карткою:\n"
-                f"Сума: {price} UAH\n"
-                f"Номер картки: {formatted_card_number}\n"
-                f"(Натисніть на номер, щоб скопіювати)\n"
-                f"Призначення платежу: Оплата замовлення #{context.user_data.get('pending_order_from_command', {}).get('order_id', 'N/A')}\n"
-                f"Після оплати натисніть кнопку нижче."
-            )
-            keyboard = [
-                [InlineKeyboardButton("✅ Оплачено", callback_data='paid_after_command')],
-                [InlineKeyboardButton("❌ Скасувати", callback_data='cancel_payment_command')]
-            ]
-            await query.message.edit_text(
-                message,
-                parse_mode='Markdown',
-                reply_markup=InlineKeyboardMarkup(keyboard)
-            )
-        except (ValueError, IndexError) as e:
-            logger.error(f"Помилка обробки оплати карткою з /pay: {e}")
-            await query.message.edit_text("❌ Помилка обробки оплати карткою.")
-        except Exception as e:
-            logger.error(f"Неочікувана помилка при обробці оплати карткою з /pay: {e}")
-            await query.message.edit_text("❌ Неочікувана помилка обробки оплати карткою.")
-    elif query.data.startswith('select_crypto_from_command_'):
-        try:
-            price_str = query.data.split('_')[-1]
-            price = int(price_str)
-            keyboard = []
-            for name, code in AVAILABLE_CURRENCIES.items():
-                callback_data = f"pay_crypto_from_command_{price}_{code}"
-                keyboard.append([InlineKeyboardButton(name, callback_data=callback_data)])
-            keyboard.append([InlineKeyboardButton("❌ Скасувати", callback_data='cancel_payment_command')])
-            await query.message.edit_text(
-                f"Оберіть криптовалюту для оплати {price} UAH:",
-                reply_markup=InlineKeyboardMarkup(keyboard)
-            )
-        except (ValueError, IndexError) as e:
-            logger.error(f"Ошибка обработки выбора криптовалюты из /pay: {e}")
-            await query.message.edit_text("❌ Помилка обробки вибору криптовалюти.")
-        except Exception as e:
-            logger.error(f"Неожиданная ошибка при обработке выбора криптовалюты из /pay: {e}")
-            await query.message.edit_text("❌ Неожиданная помилка обробки вибору криптовалюти.")
-    elif query.data.startswith('pay_crypto_from_command_'):
-        try:
-            parts = query.data.split('_')
-            if len(parts) < 5 or not parts[4].isdigit():
-                raise ValueError("Некорректный формат callback_data для оплаты криптовалютой из /pay")
-            price = int(parts[4])
-            pay_currency_code = parts[5]
-            pending_order_data = context.user_data.get('pending_order_from_command')
-            if not pending_order_data:
-                await query.message.edit_text("❌ Помилка: інформація про замовлення відсутня.")
-                return
-            currency_name = next((name for name, code in AVAILABLE_CURRENCIES.items() if code == pay_currency_code), pay_currency_code)
-            invoice_data = create_nowpayments_invoice(
-                price, 
-                pending_order_data['order_id'], 
-                "Замовлення через /pay",
-                pay_currency_code
-            )
-            if invoice_data and 'invoice_url' in invoice_data:
-                pay_url = invoice_data['invoice_url']
-                message = (
-                    f"₿ Оплата криптовалютою:\n"
-                    f"Сума: {price} UAH\n"
-                    f"Валюта: {currency_name}\n"
-                    f"Натисніть кнопку нижче для переходу до оплати.\n"
-                    f"Після оплати натисніть кнопку \"✅ Оплачено\"."
-                )
-                keyboard = [
-                    [InlineKeyboardButton("🔗 Перейти до оплати", url=pay_url)],
-                    [InlineKeyboardButton("✅ Оплачено", callback_data='paid_after_command')],
-                    [InlineKeyboardButton("❌ Скасувати", callback_data='cancel_payment_command')]
-                ]
-                await query.message.edit_text(message, reply_markup=InlineKeyboardMarkup(keyboard))
-            else:
-                error_msg = invoice_data.get('error', 'Невідома помилка') if invoice_data else 'Невідома помилка'
-                await query.message.edit_text(f"❌ Помилка створення інвойсу для оплати криптовалютою: {error_msg}")
-        except (ValueError, IndexError) as e:
-            logger.error(f"Ошибка обработки оплаты криптовалютой из /pay: {e}")
-            await query.message.edit_text("❌ Помилка обробки оплати криптовалютою.")
-        except Exception as e:
-            logger.error(f"Неожиданная ошибка при обработке оплаты криптовалютой из /pay: {e}")
-            await query.message.edit_text("❌ Неожиданная помилка обробки оплати криптовалютою.")
-    elif query.data == 'paid_after_command':
-        pending_order_data = context.user_data.get('pending_order_from_command')
-        if pending_order_data:
-            order_id = pending_order_data['order_id']
-            total_uah = pending_order_data['total_uah']
-            order_text = pending_order_data['order_text']
+
+            # Сохраняем заказ в БД
             try:
-                save_order(user_id, order_id, order_text, total_uah)
+                items_str = f"{product_data['name']} - {price} UAH"
+                save_order(user_id, order_id, items_str, price)
                 increment_orders()
             except Exception as e:
-                logger.error(f"Ошибка сохранения заказа из /pay: {e}")
-            order_summary = (
-                f"🛍️ НОВЕ ЗАМОВЛЕННЯ #{order_id}\n"
-                f"👤 Клієнт: @{user.username or user.first_name} (ID: {user_id})\n"
-                f"{order_text}\n"
-                f"Команда для підтвердження: <code>/pay {order_id} {pending_order_data['items_str']}</code>"
-            )
-            success = False
-            for owner_id in OWNER_IDS:
-                try:
-                    await context.bot.send_message(
-                        chat_id=owner_id,
-                        text=order_summary,
-                        parse_mode='HTML'
-                    )
-                    success = True
-                except Exception as e:
-                    logger.error(f"Не вдалося відправити повідомлення власнику {owner_id}: {e}")
-            
-            universal_keyboard = get_universal_menu_keyboard()
+                logger.error(f"Ошибка сохранения цифрового заказа: {e}")
 
-            if success:
-                await query.message.edit_text(
-                    "✅ Дякуємо за оплату! Ми зв'яжемося з вами найближчим часом для підтвердження замовлення.",
-                    reply_markup=universal_keyboard
-                )
-            else:
-                await query.message.edit_text(
-                    "✅ Дякуємо за оплату! Виникла помилка при відправці сповіщення, але оплата прийнята.",
-                    reply_markup=universal_keyboard
-                )
-            context.user_data.pop('pending_order_from_command', None)
+            # Отправляем уведомление владельцам и менеджеру
+            await send_order_notification(context, user, context.user_data['pending_order'])
+
+            # Удаляем временные данные
+            context.user_data.pop('pending_order', None)
+
+            # Сообщение пользователю уже отправлено в send_order_notification
+            # await query.message.edit_text("✅ Замовлення прийнято! Дякуємо.", reply_markup=get_universal_menu_keyboard())
         else:
-            await query.message.edit_text("ℹ️ Інформація про оплату вже оброблена або відсутня.")
-    elif query.data == 'cancel_payment_command':
-        pending_order_data = context.user_data.get('pending_order_from_command')
-        if pending_order_data:
-            await query.message.edit_text(
-                f"❌ Оплата скасована.\n"
-                f"Номер замовлення: #{pending_order_data['order_id']}\n"
-                f"Сума: {pending_order_data['total_uah']} UAH\n"
-                f"Ви можете зробити нове замовлення через /start або повторно відправити команду /pay."
-            )
-            context.user_data.pop('pending_order_from_command', None)
-        else:
-            await query.message.edit_text("❌ Оплата вже скасована або відсутня.")
+            await query.message.edit_text("❌ Помилка: цифровий товар не знайдено.")
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     logger.info(f"📨 Получено текстовое сообщение от пользователя {update.effective_user.id}")
@@ -1123,23 +911,39 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         subscription_details = context.user_data.get('subscription_order_details', {})
         if subscription_details:
             data_message = (
-                f"🔐 Дані для замовлення (Підписка) #{subscription_details['order_id']} від @{user.username or user.first_name} (ID: {user_id}):\n"
-                f"📦 Сервіс: {subscription_details['service']}\n"
-                f"▫️ План: {subscription_details['plan']}\n"
-                f"▫️ Період: {subscription_details['period']}\n"
-                f"▫️ Сума: {subscription_details['price']} UAH\n"
-                f"🔑 Логін/Пароль:\n{message_text}"
+                f"🔐 Дані для замовлення (Підписка) #{subscription_details['order_id']} від @{user.username or user.first_name} (ID: {user_id}):
+"
+                f"📦 Сервіс: {subscription_details['service']}
+"
+                f"▫️ План: {subscription_details['plan']}
+"
+                f"▫️ Період: {subscription_details['period']}
+"
+                f"▫️ Сума: {subscription_details['price']} UAH
+"
+                f"🔑 Логін/Пароль:
+{message_text}"
             )
             success = False
+            # Отправка менеджеру
+            if MANAGER_ID:
+                try:
+                    await context.bot.send_message(chat_id=MANAGER_ID, text=data_message)
+                    success = True
+                    logger.info(f"✅ Данные о подписке отправлены менеджеру {MANAGER_ID}")
+                except Exception as e:
+                    logger.error(f"❌ Не удалось отправить данные менеджеру {MANAGER_ID}: {e}")
+
+            # Отправка владельцам
             for owner_id in OWNER_IDS:
                 try:
                     await context.bot.send_message(chat_id=owner_id, text=data_message)
                     success = True
+                    logger.info(f"✅ Данные о подписке отправлены владельцу {owner_id}")
                 except Exception as e:
-                    logger.error(f"Не удалось отправить данные владельцу {owner_id}: {e}")
-            
-            universal_keyboard = get_universal_menu_keyboard()
+                    logger.error(f"❌ Не удалось отправить данные владельцу {owner_id}: {e}")
 
+            universal_keyboard = get_universal_menu_keyboard()
             if success:
                 await update.message.reply_text(
                     "✅ Дякуємо! Дані отримано. Наш менеджер зв'яжеться з вами найближчим часом.",
@@ -1161,11 +965,16 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         except Exception as e:
             logger.error(f"Ошибка сохранения вопроса в БД: {e}")
         forward_message = (
-            f"❓ Нове запитання від клієнта:\n"
-            f"👤 Клієнт: {user.first_name}\n"
-            f"📱 Username: @{user.username if user.username else 'не вказано'}\n"
-            f"🆔 ID: {user.id}\n"
-            f"💬 Повідомлення:\n{message_text}"
+            f"❓ Нове запитання від клієнта:
+"
+            f"👤 Клієнт: {user.first_name}
+"
+            f"📱 Username: @{user.username if user.username else 'не вказано'}
+"
+            f"🆔 ID: {user.id}
+"
+            f"💬 Повідомлення:
+{message_text}"
         )
         try:
             await context.bot.send_message(chat_id=MANAGER_ID, text=forward_message)
@@ -1202,66 +1011,65 @@ async def pay_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     if not items:
         await update.message.reply_text("❌ Не вдалося розпізнати товари у замовленні. Перевірте формат.")
         return
-    order_text = f"🛍️ Нове замовлення #{order_id} від @{user.username or user.first_name} (ID: {user.id})\n"
+    order_text = f"🛍️ Нове замовлення #{order_id} від @{user.username or user.first_name} (ID: {user.id})
+"
     total_uah = 0
     order_details = []
     for service_abbr, plan_abbr, period, price_str in items:
         price = int(price_str)
         total_uah += price
         order_details.append(f"▫️ {service_abbr}-{plan_abbr}-{period} - {price} UAH")
-    order_text += "\n".join(order_details)
-    order_text += f"\n💳 Всього: {total_uah} UAH"
+    order_text += "
+".join(order_details)
+    order_text += f"
+💳 Всього: {total_uah} UAH"
     context.user_data['pending_order_from_command'] = {
         'order_id': order_id,
         'items_str': items_str,
         'total_uah': total_uah,
         'order_text': order_text
     }
+
+    # Сохраняем заказ в БД
+    try:
+        items_str_db = "
+".join(order_details) # Используем детали для БД
+        save_order(user.id, order_id, items_str_db, total_uah)
+        increment_orders()
+    except Exception as e:
+        logger.error(f"Ошибка сохранения заказа из /pay: {e}")
+
+    # Отправка уведомления владельцам
     success = False
     for owner_id in OWNER_IDS:
         try:
             await context.bot.send_message(chat_id=owner_id, text=order_text)
             success = True
+            logger.info(f"✅ Уведомление о заказе из /pay отправлено владельцу {owner_id}")
         except Exception as e:
-            logger.error(f"Не удалось отправить заказ владельцу {owner_id}: {e}")
-    invoice_data = create_nowpayments_invoice(total_uah, order_id, "Замовлення через /pay")
-    if invoice_data and 'invoice_url' in invoice_data:
-        pay_url = invoice_data['invoice_url']
-        payment_message = (
-            f"✅ Дякуємо за замовлення #{order_id}!\n"
-            f"💳 Сума до сплати: {total_uah} UAH\n"
-            f"Оберіть спосіб оплати:"
-        )
-        keyboard = [
-            [InlineKeyboardButton("₿ Оплатити криптовалютою", url=pay_url)],
-            [InlineKeyboardButton("💳 Оплатити карткою", callback_data=f"pay_card_from_command_{total_uah}")],
-            [InlineKeyboardButton("💱 Вибрати криптовалюту", callback_data=f"select_crypto_from_command_{total_uah}")],
-            [InlineKeyboardButton("✅ Оплачено", callback_data='paid_after_command')],
-            [InlineKeyboardButton("❌ Скасувати", callback_data='cancel_payment_command')]
-        ]
+            logger.error(f"❌ Не удалось отправить заказ владельцу {owner_id}: {e}")
+
+    # Отправка уведомления менеджеру
+    if MANAGER_ID:
+         try:
+             await context.bot.send_message(chat_id=MANAGER_ID, text=order_text)
+             logger.info(f"✅ Уведомление о заказе из /pay отправлено менеджеру {MANAGER_ID}")
+         except Exception as e:
+             logger.error(f"❌ Не удалось отправить заказ менеджеру {MANAGER_ID}: {e}")
+
+    # Ответ пользователю
+    universal_keyboard = get_universal_menu_keyboard()
+    if success:
         await update.message.reply_text(
-            payment_message, 
-            parse_mode='Markdown', 
-            reply_markup=InlineKeyboardMarkup(keyboard)
+            "✅ Дякуємо за замовлення! Ми зв'яжемося з вами найближчим часом для підтвердження.",
+            reply_markup=universal_keyboard
         )
     else:
-        error_msg = invoice_data.get('error', 'Невідома помилка') if invoice_data else 'Невідома помилка'
         await update.message.reply_text(
-            f"✅ Дякуємо за замовлення #{order_id}!\n"
-            f"💳 Сума до сплати: {total_uah} UAH\n"
-            f"⚠️ Помилка створення посилання для оплати: {error_msg}\n"
-            f"Ми зв'яжемося з вами найближчим часом для підтвердження."
+            "✅ Дякуємо за замовлення! Виникла помилка при відправці сповіщення, але замовлення прийняте.",
+            reply_markup=universal_keyboard
         )
-        keyboard = [
-            [InlineKeyboardButton("💳 Оплатити карткою", callback_data=f"pay_card_from_command_{total_uah}")],
-            [InlineKeyboardButton("💱 Вибрати криптовалюту", callback_data=f"select_crypto_from_command_{total_uah}")],
-            [InlineKeyboardButton("✅ Оплачено", callback_data='paid_after_command')],
-            [InlineKeyboardButton("❌ Скасувати", callback_data='cancel_payment_command')]
-        ]
-        await update.message.reply_text(
-            "Оберіть спосіб оплати:",
-            reply_markup=InlineKeyboardMarkup(keyboard)
-        )
+    context.user_data.pop('pending_order_from_command', None)
 
 def main() -> None:
     logger.info("🚀 Инициализация приложения бота...")
@@ -1315,6 +1123,5 @@ def main() -> None:
     application.post_init = set_commands_menu
     logger.info("🤖 Бот запущен. Нажмите Ctrl+C для остановки.")
     application.run_polling(allowed_updates=Update.ALL_TYPES)
-
 if __name__ == "__main__":
     main()
