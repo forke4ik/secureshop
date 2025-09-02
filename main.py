@@ -40,7 +40,7 @@ from config import (
     NOWPAYMENTS_IPN_SECRET,
     PAYMENT_CURRENCY,
     CARD_NUMBER,
-    SECURE_SUPPORT_ID, # Импортируем ID менеджера
+    SECURE_SUPPORT_ID,
 )
 from products_config import SUBSCRIPTIONS, DIGITAL_PRODUCTS, DIGITAL_PRODUCT_MAP
 logging.basicConfig(
@@ -51,7 +51,7 @@ logger = logging.getLogger(__name__)
 bot_running = False
 bot_lock = threading.Lock()
 OWNER_IDS = [id for id in [OWNER_ID_1, OWNER_ID_2] if id is not None]
-MANAGER_ID = SECURE_SUPPORT_ID # Используем ID менеджера из config.py
+MANAGER_ID = SECURE_SUPPORT_ID
 NOWPAYMENTS_API_URL = "https://api.nowpayments.io/v1"
 AVAILABLE_CURRENCIES = {
     "USDT (Solana)": "usdtsol",
@@ -307,21 +307,18 @@ def ensure_user_exists(user):
         save_user(user)
     except Exception as e:
         logger.error(f"Ошибка при добавлении/обновлении пользователя {user.id}: {e}")
-
-# Функция для отправки уведомления о заказе (обновлена)
 async def send_order_notification(context, user, pending_order):
     if pending_order.get('type') == 'subscription':
-order_summary_for_owner = (
-    f"🛍️ НОВЕ ЗАМОВЛЕННЯ (Підписка) #{pending_order['order_id']}\n"
-    f"👤 Клієнт: @{user.username or user.first_name} (ID: {user.id})\n"
-    f"📦 Деталі замовлення:\n"
-    f"▫️ Сервіс: {pending_order['service']}\n"
-    f"▫️ План: {pending_order['plan']}\n"
-    f"▫️ Період: {pending_order['period']}\n"
-    f"▫️ Сума: {pending_order['price']} UAH\n"
-    f"💳 ЗАГАЛЬНА СУМА: {pending_order['price']} UAH"
-)
-        # Отправка менеджеру
+        order_summary_for_owner = (
+            f"🛍️ НОВЕ ЗАМОВЛЕННЯ (Підписка) #{pending_order['order_id']}\n"
+            f"👤 Клієнт: @{user.username or user.first_name} (ID: {user.id})\n"
+            f"📦 Деталі замовлення:\n"
+            f"▫️ Сервіс: {pending_order['service']}\n"
+            f"▫️ План: {pending_order['plan']}\n"
+            f"▫️ Період: {pending_order['period']}\n"
+            f"▫️ Сума: {pending_order['price']} UAH\n"
+            f"💳 ЗАГАЛЬНА СУМА: {pending_order['price']} UAH\n"
+        )
         if MANAGER_ID:
             try:
                 await context.bot.send_message(
@@ -331,8 +328,6 @@ order_summary_for_owner = (
                 logger.info(f"✅ Уведомление о заказе отправлено менеджеру {MANAGER_ID}")
             except Exception as e:
                 logger.error(f"❌ Не удалось отправить уведомление менеджеру {MANAGER_ID}: {e}")
-
-        # Отправка владельцам
         success = False
         for owner_id in OWNER_IDS:
             try:
@@ -344,35 +339,22 @@ order_summary_for_owner = (
                 logger.info(f"✅ Уведомление о заказе отправлено владельцу {owner_id}")
             except Exception as e:
                 logger.error(f"❌ Не удалось отправить уведомление владельцу {owner_id}: {e}")
-
-        # Ответ пользователю
         special_message_needed = False
         if (pending_order.get('service') == SUBSCRIPTIONS.get('duolingo', {}).get('name', 'Duolingo') and
             pending_order.get('plan') == SUBSCRIPTIONS.get('duolingo', {}).get('plans', {}).get('fam', {}).get('name', 'Family') and
             pending_order.get('price') == 380):
             special_message_needed = True
-
         universal_keyboard = get_universal_menu_keyboard()
         if special_message_needed:
             if user.username:
-                # Уведомление для Duolingo Family
                 await context.bot.send_message(
                     chat_id=user.id,
-                    text="✅ Дякуємо за замовлення!
-"
-                         "Ваш акаунт буде додано до сімейної підписки Duolingo протягом 10 хвилин.
-"
-                         "Якщо цього не сталося, зверніться до служби підтримки.",
+                    text="✅ Дякуємо за замовлення!\nВаш акаунт буде додано до сімейної підписки Duolingo протягом 10 хвилин.\nЯкщо цього не сталося, зверніться до служби підтримки.",
                     reply_markup=universal_keyboard
                 )
             else:
-                # Уведомление для Duolingo Family без username
                 support_message = (
-                    "✅ Дякуємо за замовлення!
-"
-                    "Ваш акаунт буде додано до сімейної підписки Duolingo протягом 10 хвилин.
-"
-                    "Якщо цього не сталося, зверніться до служби підтримки."
+                    "✅ Дякуємо за замовлення!\nВаш акаунт буде додано до сімейної підписки Duolingo протягом 10 хвилин.\nЯкщо цього не сталося, зверніться до служби підтримки."
                 )
                 support_keyboard = [
                     [InlineKeyboardButton("💬 Зв'язатися з підтримкою", url="https://t.me/SecureSupport")],
@@ -388,23 +370,16 @@ order_summary_for_owner = (
                 )
         else:
             if user.username:
-                # Уведомление с просьбой отправить логин/пароль
                 await context.bot.send_message(
                     chat_id=user.id,
                     text="✅ Дякуємо за замовлення! Для завершення, будь ласка, надішліть мені ваш логін та пароль для сервісу в наступному повідомленні.",
                     reply_markup=universal_keyboard
                 )
-                # Устанавливаем флаг ожидания данных
                 context.user_data['awaiting_subscription_data'] = True
                 context.user_data['subscription_order_details'] = pending_order
             else:
-                # Уведомление без username
                 support_message = (
-                    "✅ Дякуємо за замовлення!
-"
-                    "Для завершення, будь ласка, зв'яжіться з нашою службою підтримки.
-"
-                    "Натисніть кнопку нижче, щоб перейти до чату з оператором."
+                    "✅ Дякуємо за замовлення!\nДля завершення, будь ласка, зв'яжіться з нашою службою підтримки.\nНатисніть кнопку нижче, щоб перейти до чату з оператором."
                 )
                 support_keyboard = [
                     [InlineKeyboardButton("💬 Зв'язатися з підтримкою", url="https://t.me/SecureSupport")],
@@ -418,23 +393,15 @@ order_summary_for_owner = (
                     text=support_message,
                     reply_markup=InlineKeyboardMarkup(support_keyboard)
                 )
-
     elif pending_order.get('type') == 'digital':
         order_summary_for_owner = (
-            f"🛍️ НОВЕ ЗАМОВЛЕННЯ (Цифровий товар) #{pending_order['order_id']}
-"
-            f"👤 Клієнт: @{user.username or user.first_name} (ID: {user.id})
-"
-            f"📦 Деталі замовлення:
-"
-            f"▫️ Товар: {pending_order['plan']}
-"
-            f"▫️ Сума: {pending_order['price']} UAH
-"
-            f"💳 ЗАГАЛЬНА СУМА: {pending_order['price']} UAH
-"
+            f"🛍️ НОВЕ ЗАМОВЛЕННЯ (Цифровий товар) #{pending_order['order_id']}\n"
+            f"👤 Клієнт: @{user.username or user.first_name} (ID: {user.id})\n"
+            f"📦 Деталі замовлення:\n"
+            f"▫️ Товар: {pending_order['plan']}\n"
+            f"▫️ Сума: {pending_order['price']} UAH\n"
+            f"💳 ЗАГАЛЬНА СУМА: {pending_order['price']} UAH\n"
         )
-        # Отправка менеджеру
         if MANAGER_ID:
             try:
                 await context.bot.send_message(
@@ -444,8 +411,6 @@ order_summary_for_owner = (
                 logger.info(f"✅ Уведомление о цифровом заказе отправлено менеджеру {MANAGER_ID}")
             except Exception as e:
                 logger.error(f"❌ Не удалось отправить уведомление менеджеру {MANAGER_ID}: {e}")
-
-        # Отправка владельцам
         success = False
         for owner_id in OWNER_IDS:
             try:
@@ -457,8 +422,6 @@ order_summary_for_owner = (
                 logger.info(f"✅ Уведомление о цифровом заказе отправлено владельцу {owner_id}")
             except Exception as e:
                 logger.error(f"❌ Не удалось отправить уведомление владельцу {owner_id}: {e}")
-
-        # Ответ пользователю
         universal_keyboard = get_universal_menu_keyboard()
         if user.username:
             await context.bot.send_message(
@@ -468,16 +431,13 @@ order_summary_for_owner = (
             )
         else:
              support_message = (
-                 "✅ Дякуємо за замовлення!
-"
-                 "Наш менеджер зв'яжеться з вами найближчим часом. Якщо цього не сталося, будь ласка, зв'яжіться з нами."
+                 "✅ Дякуємо за замовлення!\nНаш менеджер зв'яжеться з вами найближчим часом. Якщо цього не сталося, будь ласка, зв'яжіться з нами."
              )
              await context.bot.send_message(
                  chat_id=user.id,
                  text=support_message,
                  reply_markup=universal_keyboard
              )
-
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     logger.info(f"🚀 Вызов /start пользователем {update.effective_user.id}")
     user = update.effective_user
@@ -488,8 +448,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             [InlineKeyboardButton("📊 Статистика", callback_data="stats")],
         ]
         reply_markup = InlineKeyboardMarkup(keyboard)
-        greeting = f"👋 Привіт, {user.first_name}!
-Ви є власником цього бота."
+        greeting = f"👋 Привіт, {user.first_name}!\nВи є власником цього бота."
         await update.message.reply_text(greeting, reply_markup=reply_markup)
     else:
         keyboard = [
@@ -500,30 +459,21 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             [InlineKeyboardButton("📜 Правила", url="https://drive.google.com/file/d/1t5jQWCCJeimM8lJ132M7oTRKRG7t3dug/view?usp=drivesdk")],
         ]
         reply_markup = InlineKeyboardMarkup(keyboard)
-        greeting = f"👋 Привіт, {user.first_name}!
-Ласкаво просимо до SecureShop!"
+        greeting = f"👋 Привіт, {user.first_name}!\nЛаскаво просимо до SecureShop!"
         await update.message.reply_text(greeting, reply_markup=reply_markup)
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     logger.info(f"📖 Вызов /help пользователем {update.effective_user.id}")
     help_text = (
-        "👋 Доброго дня! Я бот магазину SecureShop.
-"
+        "👋 Доброго дня! Я бот магазину SecureShop.\n"
         "🔐 Наш сервіс купує підписки на ваш готовий акаунт, а не дає вам свій. "
         "Ми дуже стараємось бути з клієнтами, тому відповіді на будь-які питання "
-        "по нашому сервісу можна задавати цілодобово.
-"
-        "📌 Список доступних команд:
-"
-        "/start - Головне меню
-"
-        "/help - Ця довідка
-"
-        "/order - Зробити замовлення
-"
-        "/question - Поставити запитання
-"
-        "/channel - Наш головний канал
-"
+        "по нашому сервісу можна задавати цілодобово.\n"
+        "📌 Список доступних команд:\n"
+        "/start - Головне меню\n"
+        "/help - Ця довідка\n"
+        "/order - Зробити замовлення\n"
+        "/question - Поставити запитання\n"
+        "/channel - Наш головний канал\n"
         "Також ви можете відправити команду `/pay` з сайту для оформлення замовлення."
     )
     await update.message.reply_text(help_text)
@@ -534,18 +484,12 @@ async def channel_command(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
     message_text = (
-        "📢 Наш головний канал з асортиментом, оновленнями та розіграшами:
-"
-        "👉 Тут ви знайдете:
-"
-        "- 🆕 Актуальні товари та послуги
-"
-        "- 🔥 Спеціальні пропозиції та знижки
-"
-        "- 🎁 Розіграші та акції
-"
-        "- ℹ️ Важливі оновлення сервісу
-"
+        "📢 Наш головний канал з асортиментом, оновленнями та розіграшами:\n"
+        "👉 Тут ви знайдете:\n"
+        "- 🆕 Актуальні товари та послуги\n"
+        "- 🔥 Спеціальні пропозиції та знижки\n"
+        "- 🎁 Розіграші та акції\n"
+        "- ℹ️ Важливі оновлення сервісу\n"
         "Приєднуйтесь, щоб бути в курсі всіх новин! 👇"
     )
     await update.message.reply_text(message_text, reply_markup=reply_markup)
@@ -564,9 +508,15 @@ async def question_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     user = update.effective_user
     ensure_user_exists(user)
     context.user_data["conversation_type"] = "question"
-    await update.message.reply_text(
-        "📝 Напишіть ваше запитання. Я передам його менеджеру магазину."
-    )
+    try:
+        await update.message.reply_text(
+            "📝 Напишіть ваше запитання. Я передам його менеджеру магазину."
+        )
+    except Exception as e:
+        logger.warning(f"Не удалось отредактировать сообщение для 'question': {e}. Отправляем новое сообщение.")
+        await update.message.reply_text(
+            "📝 Напишіть ваше запитання. Я передам його менеджеру магазину."
+        )
 async def stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     logger.info(f"📈 Вызов /stats пользователем {update.effective_user.id}")
     owner_id = update.effective_user.id
@@ -578,16 +528,11 @@ async def stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         active_questions_db = get_active_questions_count()
         orders_db = get_orders_count()
         stats_message = (
-            f"📊 Статистика бота:
-"
-            f"👤 Усього користувачів (БД): {total_users_db}
-"
-            f"🛒 Усього замовлень (БД): {stats['total_orders']}
-"
-            f"❓ Усього запитаннь (БД): {stats['total_questions']}
-"
-            f"👥 Активних запитаннь (БД): {active_questions_db}
-"
+            f"📊 Статистика бота:\n"
+            f"👤 Усього користувачів (БД): {total_users_db}\n"
+            f"🛒 Усього замовлень (БД): {stats['total_orders']}\n"
+            f"❓ Усього запитаннь (БД): {stats['total_questions']}\n"
+            f"👥 Активних запитаннь (БД): {active_questions_db}\n"
             f"📦 Усього записаних замовлень (БД): {orders_db}"
         )
         await update.message.reply_text(stats_message)
@@ -642,38 +587,28 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         await query.message.edit_text("📦 Оберіть тип товару:", reply_markup=InlineKeyboardMarkup(keyboard))
     elif query.data == "question":
         context.user_data["conversation_type"] = "question"
-        # Обработка ошибки "Inline keyboard expected"
         try:
             await query.message.edit_text(
                 "📝 Напишіть ваше запитання. Я передам його менеджеру магазину.",
-                reply_markup=None # Убираем клавиатуру
+                reply_markup=None
             )
-        except Exception as e: # Более общий перехват ошибок
+        except Exception as e:
             logger.warning(f"Не удалось отредактировать сообщение для 'question': {e}. Отправляем новое сообщение.")
-            # Если не удалось отредактировать, отправляем новое сообщение
             await query.message.reply_text(
                 "📝 Напишіть ваше запитання. Я передам його менеджеру магазину."
             )
     elif query.data == "help":
         help_text = (
-            "👋 Доброго дня! Я бот магазину SecureShop.
-"
+            "👋 Доброго дня! Я бот магазину SecureShop.\n"
             "🔐 Наш сервіс купує підписки на ваш готовий акаунт, а не дає вам свій. "
             "Ми дуже стараємось бути з клієнтами, тому відповіді на будь-які питання "
-            "по нашому сервісу можна задавати цілодобово.
-"
-            "📌 Список доступних команд:
-"
-            "/start - Головне меню
-"
-            "/help - Ця довідка
-"
-            "/order - Зробити замовлення
-"
-            "/question - Поставити запитання
-"
-            "/channel - Наш головний канал
-"
+            "по нашому сервісу можна задавати цілодобово.\n"
+            "📌 Список доступних команд:\n"
+            "/start - Головне меню\n"
+            "/help - Ця довідка\n"
+            "/order - Зробити замовлення\n"
+            "/question - Поставити запитання\n"
+            "/channel - Наш головний канал\n"
             "Також ви можете відправити команду `/pay` з сайту для оформлення замовлення."
         )
         await query.message.edit_text(help_text)
@@ -681,18 +616,12 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         keyboard = [[InlineKeyboardButton("📢 Перейти в SecureShopUA", url="https://t.me/SecureShopUA")]]
         reply_markup = InlineKeyboardMarkup(keyboard)
         message_text = (
-            "📢 Наш головний канал з асортиментом, оновленнями та розіграшами:
-"
-            "👉 Тут ви знайдете:
-"
-            "- 🆕 Актуальні товари та послуги
-"
-            "- 🔥 Спеціальні пропозиції та знижки
-"
-            "- 🎁 Розіграші та акції
-"
-            "- ℹ️ Важливі оновлення сервісу
-"
+            "📢 Наш головний канал з асортиментом, оновленнями та розіграшами:\n"
+            "👉 Тут ви знайдете:\n"
+            "- 🆕 Актуальні товари та послуги\n"
+            "- 🔥 Спеціальні пропозиції та знижки\n"
+            "- 🎁 Розіграші та акції\n"
+            "- ℹ️ Важливі оновлення сервісу\n"
             "Приєднуйтесь, щоб бути в курсі всіх новин! 👇"
         )
         await query.message.edit_text(message_text, reply_markup=reply_markup)
@@ -703,8 +632,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
                 [InlineKeyboardButton("📊 Статистика", callback_data="stats")],
             ]
             reply_markup = InlineKeyboardMarkup(keyboard)
-            greeting = f"👋 Привіт, {user.first_name}!
-Ви є власником цього бота."
+            greeting = f"👋 Привіт, {user.first_name}!\nВи є власником цього бота."
             await query.message.edit_text(greeting, reply_markup=reply_markup)
         else:
             keyboard = [
@@ -715,8 +643,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
                 [InlineKeyboardButton("📜 Правила", url="https://drive.google.com/file/d/1t5jQWCCJeimM8lJ132M7oTRKRG7t3dug/view?usp=drivesdk")],
             ]
             reply_markup = InlineKeyboardMarkup(keyboard)
-            greeting = f"👋 Привіт, {user.first_name}!
-Ласкаво просимо до SecureShop!"
+            greeting = f"👋 Привіт, {user.first_name}!\nЛаскаво просимо до SecureShop!"
             await query.message.edit_text(greeting, reply_markup=reply_markup)
     elif query.data == "order_subscriptions":
         keyboard = []
@@ -746,8 +673,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
                     keyboard.append([InlineKeyboardButton(f"{option['period']} - {option['price']} UAH", callback_data=callback_data)])
                 keyboard.append([InlineKeyboardButton("⬅️ Назад", callback_data=f'service_{service_key}')])
                 await query.message.edit_text(
-                    f"🛒 {service['name']} {plan_data['name']}
-Оберіть період:",
+                    f"🛒 {service['name']} {plan_data['name']}\nОберіть період:",
                     reply_markup=InlineKeyboardMarkup(keyboard)
                 )
     elif query.data.startswith('add_'):
@@ -780,42 +706,19 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
                     'command': command,
                     'type': 'subscription'
                 }
-
-                # Сохраняем заказ в БД
                 try:
                     items_str = f"{service['name']} {service['plans'][plan_key]['name']} ({period}) - {price} UAH"
                     save_order(user_id, order_id, items_str, price)
                     increment_orders()
                 except Exception as e:
                     logger.error(f"Ошибка сохранения заказа: {e}")
-
-                # Отправляем уведомление владельцам и менеджеру
                 await send_order_notification(context, user, context.user_data['pending_order'])
-
-                # Удаляем временные данные
                 context.user_data.pop('pending_order', None)
-
-                # Сообщение пользователю уже отправлено в send_order_notification
-                # Можно здесь ничего не делать или показать меню
-                # await query.message.edit_text("✅ Замовлення прийнято! Дякуємо.", reply_markup=get_universal_menu_keyboard())
             else:
                 await query.message.edit_text("❌ Помилка: сервіс або план не знайдено.")
         except (ValueError, IndexError) as e:
             logger.error(f"Ошибка обработки add_ callback: {e}")
             await query.message.edit_text("❌ Помилка обробки вибору періоду.")
-
-    # Обработчики, связанные с оплатой, удалены
-    # elif query.data.startswith('pay_card_'): ...
-    # elif query.data.startswith('select_crypto_'): ...
-    # elif query.data.startswith('pay_crypto_'): ...
-    # elif query.data in ['paid_card', 'paid_crypto']: ...
-    # elif query.data == 'cancel_payment': ...
-    # elif query.data.startswith('pay_card_from_command_'): ...
-    # elif query.data.startswith('select_crypto_from_command_'): ...
-    # elif query.data.startswith('pay_crypto_from_command_'): ...
-    # elif query.data == 'paid_after_command': ...
-    # elif query.data == 'cancel_payment_command': ...
-
     elif query.data == "order_digital":
         keyboard = [
             [InlineKeyboardButton("🎮 Discord Украшення", callback_data="digital_discord_decor")],
@@ -872,26 +775,16 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
                 'command': command,
                 'type': 'digital'
             }
-
-            # Сохраняем заказ в БД
             try:
                 items_str = f"{product_data['name']} - {price} UAH"
                 save_order(user_id, order_id, items_str, price)
                 increment_orders()
             except Exception as e:
                 logger.error(f"Ошибка сохранения цифрового заказа: {e}")
-
-            # Отправляем уведомление владельцам и менеджеру
             await send_order_notification(context, user, context.user_data['pending_order'])
-
-            # Удаляем временные данные
             context.user_data.pop('pending_order', None)
-
-            # Сообщение пользователю уже отправлено в send_order_notification
-            # await query.message.edit_text("✅ Замовлення прийнято! Дякуємо.", reply_markup=get_universal_menu_keyboard())
         else:
             await query.message.edit_text("❌ Помилка: цифровий товар не знайдено.")
-
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     logger.info(f"📨 Получено текстовое сообщение от пользователя {update.effective_user.id}")
     user = update.effective_user
@@ -903,21 +796,14 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         subscription_details = context.user_data.get('subscription_order_details', {})
         if subscription_details:
             data_message = (
-                f"🔐 Дані для замовлення (Підписка) #{subscription_details['order_id']} від @{user.username or user.first_name} (ID: {user_id}):
-"
-                f"📦 Сервіс: {subscription_details['service']}
-"
-                f"▫️ План: {subscription_details['plan']}
-"
-                f"▫️ Період: {subscription_details['period']}
-"
-                f"▫️ Сума: {subscription_details['price']} UAH
-"
-                f"🔑 Логін/Пароль:
-{message_text}"
+                f"🔐 Дані для замовлення (Підписка) #{subscription_details['order_id']} від @{user.username or user.first_name} (ID: {user_id}):\n"
+                f"📦 Сервіс: {subscription_details['service']}\n"
+                f"▫️ План: {subscription_details['plan']}\n"
+                f"▫️ Період: {subscription_details['period']}\n"
+                f"▫️ Сума: {subscription_details['price']} UAH\n"
+                f"🔑 Логін/Пароль:\n{message_text}"
             )
             success = False
-            # Отправка менеджеру
             if MANAGER_ID:
                 try:
                     await context.bot.send_message(chat_id=MANAGER_ID, text=data_message)
@@ -925,8 +811,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
                     logger.info(f"✅ Данные о подписке отправлены менеджеру {MANAGER_ID}")
                 except Exception as e:
                     logger.error(f"❌ Не удалось отправить данные менеджеру {MANAGER_ID}: {e}")
-
-            # Отправка владельцам
             for owner_id in OWNER_IDS:
                 try:
                     await context.bot.send_message(chat_id=owner_id, text=data_message)
@@ -934,7 +818,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
                     logger.info(f"✅ Данные о подписке отправлены владельцу {owner_id}")
                 except Exception as e:
                     logger.error(f"❌ Не удалось отправить данные владельцу {owner_id}: {e}")
-
             universal_keyboard = get_universal_menu_keyboard()
             if success:
                 await update.message.reply_text(
@@ -957,16 +840,11 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         except Exception as e:
             logger.error(f"Ошибка сохранения вопроса в БД: {e}")
         forward_message = (
-            f"❓ Нове запитання від клієнта:
-"
-            f"👤 Клієнт: {user.first_name}
-"
-            f"📱 Username: @{user.username if user.username else 'не вказано'}
-"
-            f"🆔 ID: {user.id}
-"
-            f"💬 Повідомлення:
-{message_text}"
+            f"❓ Нове запитання від клієнта:\n"
+            f"👤 Клієнт: {user.first_name}\n"
+            f"📱 Username: @{user.username if user.username else 'не вказано'}\n"
+            f"🆔 ID: {user.id}\n"
+            f"💬 Повідомлення:\n{message_text}"
         )
         try:
             await context.bot.send_message(chat_id=MANAGER_ID, text=forward_message)
@@ -988,7 +866,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         await pay_command(update, context)
         return
     await start(update, context)
-
 async def pay_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     logger.info(f"💰 Вызов команды /pay пользователем {update.effective_user.id}")
     user = update.effective_user
@@ -1003,35 +880,27 @@ async def pay_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     if not items:
         await update.message.reply_text("❌ Не вдалося розпізнати товари у замовленні. Перевірте формат.")
         return
-    order_text = f"🛍️ Нове замовлення #{order_id} від @{user.username or user.first_name} (ID: {user.id})
-"
+    order_text = f"🛍️ Нове замовлення #{order_id} від @{user.username or user.first_name} (ID: {user.id})\n"
     total_uah = 0
     order_details = []
     for service_abbr, plan_abbr, period, price_str in items:
         price = int(price_str)
         total_uah += price
         order_details.append(f"▫️ {service_abbr}-{plan_abbr}-{period} - {price} UAH")
-    order_text += "
-".join(order_details)
-    order_text += f"
-💳 Всього: {total_uah} UAH"
+    order_text += "\n".join(order_details)
+    order_text += f"\n💳 Всього: {total_uah} UAH"
     context.user_data['pending_order_from_command'] = {
         'order_id': order_id,
         'items_str': items_str,
         'total_uah': total_uah,
         'order_text': order_text
     }
-
-    # Сохраняем заказ в БД
     try:
-        items_str_db = "
-".join(order_details) # Используем детали для БД
+        items_str_db = "\n".join(order_details)
         save_order(user.id, order_id, items_str_db, total_uah)
         increment_orders()
     except Exception as e:
         logger.error(f"Ошибка сохранения заказа из /pay: {e}")
-
-    # Отправка уведомления владельцам
     success = False
     for owner_id in OWNER_IDS:
         try:
@@ -1040,16 +909,12 @@ async def pay_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
             logger.info(f"✅ Уведомление о заказе из /pay отправлено владельцу {owner_id}")
         except Exception as e:
             logger.error(f"❌ Не удалось отправить заказ владельцу {owner_id}: {e}")
-
-    # Отправка уведомления менеджеру
     if MANAGER_ID:
          try:
              await context.bot.send_message(chat_id=MANAGER_ID, text=order_text)
              logger.info(f"✅ Уведомление о заказе из /pay отправлено менеджеру {MANAGER_ID}")
          except Exception as e:
              logger.error(f"❌ Не удалось отправить заказ менеджеру {MANAGER_ID}: {e}")
-
-    # Ответ пользователю
     universal_keyboard = get_universal_menu_keyboard()
     if success:
         await update.message.reply_text(
@@ -1062,7 +927,6 @@ async def pay_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
             reply_markup=universal_keyboard
         )
     context.user_data.pop('pending_order_from_command', None)
-
 def main() -> None:
     logger.info("🚀 Инициализация приложения бота...")
     if not BOT_TOKEN or BOT_TOKEN == "YOUR_BOT_TOKEN_HERE":
@@ -1117,4 +981,3 @@ def main() -> None:
     application.run_polling(allowed_updates=Update.ALL_TYPES)
 if __name__ == "__main__":
     main()
-
